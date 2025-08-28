@@ -1,0 +1,2 @@
+[console_scripts]
+tractviewer = tractviewer.cli:main

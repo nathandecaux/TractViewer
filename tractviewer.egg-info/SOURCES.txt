@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+tests/test_import.py
+tractviewer/__init__.py
+tractviewer/cli.py
+tractviewer/core.py
+tractviewer.egg-info/PKG-INFO
+tractviewer.egg-info/SOURCES.txt
+tractviewer.egg-info/dependency_links.txt
+tractviewer.egg-info/entry_points.txt
+tractviewer.egg-info/requires.txt
+tractviewer.egg-info/top_level.txt

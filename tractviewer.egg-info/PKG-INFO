@@ -1,0 +1,45 @@
+Metadata-Version: 2.4
+Name: tractviewer
+Version: 0.1.0
+Summary: Visualisation simplifiée de tractographies / surfaces VTK (headless possible)
+Author: Anonymous
+License: MIT
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: pyvista
+Requires-Dist: numpy
+Requires-Dist: nibabel
+Requires-Dist: imageio
+Requires-Dist: imageio-ffmpeg; platform_system != "Windows"
+Requires-Dist: matplotlib
+
+# tractviewer
+
+Petit utilitaire pour visualiser (ou capturer hors écran) des tractographies / surfaces.
+
+## Installation (editable)
+
+```bash
+pip install -e .
+```
+
+## Utilisation CLI
+
+```bash
+tractviewer bundle.vtk autre.tck --background black --screenshot img.png
+```
+
+Rotation vidéo :
+
+```bash
+tractviewer bundle.vtk --rotate 180 --rotation-output rot.mp4 --step 2
+```
+
+## API
+
+```python
+from tractviewer import TractViewer
+vis = TractViewer(off_screen=True)
+vis.add_dataset("bundle.vtk", {"name": "bundle"})
+vis.capture_screenshot("cap.png")
+```

@@ -1,0 +1,30 @@
+[project]
+name = "tractviewer"
+version = "0.1.0"
+description = "Visualisation simplifiée de tractographies / surfaces VTK (headless possible)"
+authors = [ { name = "Anonymous" } ]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "pyvista",
+  "numpy",
+  "nibabel",
+  "imageio",
+  "imageio-ffmpeg; platform_system != 'Windows'",
+  "matplotlib",
+]
+
+[project.optional-dependencies]
+offscreen = [
+  # Installation hors-écran (nécessite index supplémentaire Kitware)
+  # Commande suggérée: pip install vtk-osmesa --extra-index-url https://gitlab.kitware.com/api/v4/projects/13/packages/pypi/simple
+  "vtk-osmesa"
+]
+
+[project.scripts]
+tractviewer = "tractviewer.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

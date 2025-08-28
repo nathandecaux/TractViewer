@@ -1,0 +1,8 @@
+pyvista
+numpy
+nibabel
+imageio
+matplotlib
+
+[:platform_system != "Windows"]
+imageio-ffmpeg

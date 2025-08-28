@@ -2,9 +2,17 @@
 
 Petit utilitaire pour visualiser (ou capturer hors écran) des tractographies / surfaces.
 
-## Installation (editable)
+## Installation
 
 ```bash
+pip install git+https://github.com/nathandecaux/TractViewer.git
+```
+
+ou en version editable (pour développement) :
+
+```bash
+git clone https://github.com/nathandecaux/TractViewer.git
+cd TractViewer
 pip install -e .
 ```
 

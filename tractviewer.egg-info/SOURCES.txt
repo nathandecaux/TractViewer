@@ -4,6 +4,7 @@ tests/test_import.py
 tractviewer/__init__.py
 tractviewer/cli.py
 tractviewer/core.py
+tractviewer/enveloppe.py
 tractviewer.egg-info/PKG-INFO
 tractviewer.egg-info/SOURCES.txt
 tractviewer.egg-info/dependency_links.txt

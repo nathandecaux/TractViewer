@@ -12,18 +12,30 @@ Requires-Dist: nibabel
 Requires-Dist: imageio
 Requires-Dist: imageio-ffmpeg; platform_system != "Windows"
 Requires-Dist: matplotlib
+Provides-Extra: offscreen
+Requires-Dist: vtk-osmesa; extra == "offscreen"
 
 # tractviewer
 
 Petit utilitaire pour visualiser (ou capturer hors écran) des tractographies / surfaces.
 
-## Installation (editable)
+## Installation
 
 ```bash
+pip install git+https://github.com/nathandecaux/TractViewer.git
+```
+
+ou en version editable (pour développement) :
+
+```bash
+git clone https://github.com/nathandecaux/TractViewer.git
+cd TractViewer
 pip install -e .
 ```
 
 ## Utilisation CLI
+
+Simple capture d'écran :
 
 ```bash
 tractviewer bundle.vtk autre.tck --background black --screenshot img.png
@@ -35,6 +47,57 @@ Rotation vidéo :
 tractviewer bundle.vtk --rotate 180 --rotation-output rot.mp4 --step 2
 ```
 
+Mode interactif:
+```bash
+tractviewer bundle.vtk --interactive
+```
+
+### Paramètres par fichier
+
+Chaque entrée peut être enrichie de paramètres d'affichage via la syntaxe :
+
+```
+chemin.vtk:clé=val,clé=val
+```
+
+Clés supportées actuellement :
+
+| Clé | Effet |
+|-----|-------|
+| `scalar` / `scalars` | Nom du scalaire à activer pour la coloration |
+| `color` | Couleur fixe (nom matplotlib, hex) |
+| `opacity` | Opacité globale (0-1) |
+| `cmap` | Colormap (si scalaire actif) |
+| `line_width` | Épaisseur des lignes (streamlines) |
+| `points` / `as_points` | Force rendu de points (glyph natif, sphères implicites) |
+| `spheres` | Alias de points (rendu en sphères si supporté) |
+| `point_size` | Taille des points (pixels) si rendu points |
+| `point_radius` | Rayon (en unités monde) pour glyph de sphères (convertit en maillage) |
+
+Exemple :
+
+```bash
+tractviewer bundle.vtk:scalar=FA,cmap=viridis,opacity=0.5 another.vtk:color=red,line_width=3 \
+	--rotate 180 --rotation-output rot.mp4
+```
+
+### Mode hors-écran
+
+Pour forcer le rendu headless (cluster sans X) :
+
+```bash
+export PYVISTA_OFF_SCREEN=1
+tractviewer bundle.vtk --screenshot cap.png
+```
+
+### Rotation
+
+La rotation applique un pas d'azimut fixe à la caméra avant chaque capture. Ajuster la fluidité avec `--step` et `--rotate` (nombre total de frames). Pour un GIF :
+
+```bash
+tractviewer bundle.vtk --rotate 120 --rotation-output rot.gif --step 3 --gif
+```
+
 ## API
 
 ```python
@@ -42,4 +105,18 @@ from tractviewer import TractViewer
 vis = TractViewer(off_screen=True)
 vis.add_dataset("bundle.vtk", {"name": "bundle"})
 vis.capture_screenshot("cap.png")
+
+# Exemple avec paramètres d'affichage
+vis.add_dataset("bundle.vtk", {"scalar": "FA", "cmap": "magma", "opacity": 0.5})
+vis.record_rotation("rotation.mp4", n_frames=180, step=2)
+
+# Points / sphères
+vis.add_dataset(
+	"points.vtk",
+	{"points": True, "point_size": 8, "color": "yellow"}
+)
+vis.add_dataset(
+	"points.vtk",
+	{"point_radius": 0.5, "color": "red", "opacity": 0.6}
+)
 ```

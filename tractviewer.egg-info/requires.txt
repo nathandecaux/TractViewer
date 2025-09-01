@@ -6,3 +6,6 @@ matplotlib
 
 [:platform_system != "Windows"]
 imageio-ffmpeg
+
+[offscreen]
+vtk-osmesa

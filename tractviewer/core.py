@@ -22,7 +22,7 @@ DataInput = Union[str, Path, pv.DataSet]
 ParamDict = Dict[str, object]
 
 os.environ["TRACTVIEWER_NIFTI_COORD"] = "LPS"
-
+os.environ["TRACTVIEWER_NIFTI_ISO"] = "0.2"
 class TractViewer:
     """
     Visualisation simplifiée de fichiers/datasets VTK via pyvista.
@@ -185,7 +185,8 @@ class TractViewer:
             return empty
         # Isosurface
         try:
-            surf = grid.contour([iso_value], scalars="intensity")
+            surf = grid.contour([iso_value], scalars="intensity",method="marching_cubes")
+            print(f"Isosurface extraite (marching_cubes) à {iso_value:.3f} dans {path.name}")
         except Exception as e:
             warnings.warn(f"Echec contour: {e}; fallback extract_surface (coarse).")
             surf = grid.extract_surface()

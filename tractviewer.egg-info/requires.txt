@@ -3,6 +3,7 @@ numpy
 nibabel
 imageio
 matplotlib
+meshio
 
 [:platform_system != "Windows"]
 imageio-ffmpeg

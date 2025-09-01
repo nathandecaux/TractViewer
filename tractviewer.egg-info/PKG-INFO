@@ -12,6 +12,7 @@ Requires-Dist: nibabel
 Requires-Dist: imageio
 Requires-Dist: imageio-ffmpeg; platform_system != "Windows"
 Requires-Dist: matplotlib
+Requires-Dist: meshio
 Provides-Extra: offscreen
 Requires-Dist: vtk-osmesa; extra == "offscreen"
 

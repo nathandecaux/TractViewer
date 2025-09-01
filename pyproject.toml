@@ -13,6 +13,7 @@ dependencies = [
   "imageio",
   "imageio-ffmpeg; platform_system != 'Windows'",
   "matplotlib",
+  "meshio"
 ]
 
 [project.optional-dependencies]

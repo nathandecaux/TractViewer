@@ -210,9 +210,10 @@ class TractViewer:
         surf.field_data["nifti_iso_value"] = np.array([iso_value], dtype=np.float32)
         return surf
 
-    def add_dataset(self, data: DataInput, params: Optional[ParamDict] = None):
+    def add_dataset(self, data: DataInput, params: Optional[ParamDict] = None, **kwargs):
         ds = self._load(data)
         params = dict(params or {})
+        params.update(kwargs)  # Merge params with additional kwargs
         if "name" not in params:
             params["name"] = f"ds{len(self._datasets)}"
         # Enregistrer affine de référence si NIfTI

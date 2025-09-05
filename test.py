@@ -60,7 +60,7 @@ if __name__ == "__main__":
             "opacity": 1.0,
             "name": "centroids",
             "style": "points",
-            "render_points_as_spheres": True,
+            "points_as_spheres": True,
         }
     ).add_dataset(
         "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/average_anat.nii.gz",

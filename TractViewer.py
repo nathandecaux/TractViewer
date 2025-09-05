@@ -36,7 +36,7 @@ class TractViewer:
       - point_size / line_width: tailles optionnelles
       - ambient / specular / diffuse: réglages matériaux
       - style: 'surface' | 'wireframe' | 'points'   (nouveau; défaut surface)
-      - render_points_as_spheres: bool (utile si style='points')
+      - points_as_spheres: bool (utile si style='points')
       - name: nom interne (sinon auto)
     Paramètres globaux (constructeur):
       - background: couleur du fond (default "white")
@@ -323,7 +323,7 @@ class TractViewer:
                 opacity=prm.get("opacity", 1.0),
                 show_edges=prm.get("show_edges", False),
                 # Une seule scalar bar globale (premier dataset éligible)
-                show_scalar_bar=bool(display_array) and prm.get("scalar_bar", True) and not self._scalar_bar_added,
+                scalar_bar=bool(display_array) and prm.get("scalar_bar", True) and not self._scalar_bar_added,
                 name=prm.get("name"),
                 color=prm.get("color"),
                 style=prm.get("style"),  # 'surface' | 'wireframe' | 'points'
@@ -332,9 +332,9 @@ class TractViewer:
             if add_kwargs.get("style") == "points" and "point_size" not in prm:
                 add_kwargs["point_size"] = 5
             # Option de rendu sphérique des points
-            if "render_points_as_spheres" in prm:
-                add_kwargs["render_points_as_spheres"] = prm["render_points_as_spheres"]
-            if add_kwargs["show_scalar_bar"]:
+            if "points_as_spheres" in prm:
+                add_kwargs["points_as_spheres"] = prm["points_as_spheres"]
+            if add_kwargs["scalar_bar"]:
                 sb_args = prm.get("scalar_bar_args") or {}
                 sb_defaults = {
                     "title": display_array or "",
@@ -349,7 +349,7 @@ class TractViewer:
                 if opt in prm:
                     add_kwargs[opt] = prm[opt]
             self._plotter.add_mesh(mesh, **{k: v for k, v in add_kwargs.items() if v is not None})
-            if add_kwargs.get("show_scalar_bar"):
+            if add_kwargs.get("scalar_bar"):
                 self._scalar_bar_added = True
 
         # Ajuster caméra globale
@@ -781,7 +781,7 @@ if __name__ == "__main__":
             "cmap": "viridis",
             "threshold": ("point_index", (0, 24)),
             "opacity": 0.9,
-            "scalar_bar": True,  # mappé vers show_scalar_bar
+            "scalar_bar": True,  # mappé vers scalar_bar
             "name": "associations",
         }
     ).add_dataset(
@@ -793,7 +793,7 @@ if __name__ == "__main__":
             "opacity": 1.0,
             "name": "centroids",
             "style": "points",
-            "render_points_as_spheres": True,
+            "points_as_spheres": True,
         }
     ).add_dataset(
         "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/average_anat.nii.gz",

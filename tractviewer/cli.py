@@ -3,6 +3,7 @@ from pathlib import Path
 from .core import TractViewer
 from typing import Dict
 import re
+import threading
 
 def build_parser():
     p = argparse.ArgumentParser(prog="tractviewer", description="Visualisation headless de tractographies / surfaces")
@@ -14,7 +15,7 @@ def build_parser():
             "chemin:clé=val,clé=val,...\n"
             "Types auto: int, float, bool (true/false), None.\n"
             "Listes / tuples: utiliser parenthèses. Ex:\n"
-            "  volume.nii.gz:display_array=intensity,cmap=gray,clim=(200,800),opacity=0.3,scalar_bar=false,ambient=0.6,specular=0.1,diffuse=0.8,style=surface\n"
+            "  volume.nii.gz:display_array=intensity,cmap=gray,clim=(200,800),opacity=0.3,show_scalar_bar=false,ambient=0.6,specular=0.1,diffuse=0.8,style=surface\n"
             "Threshold: threshold=(array,min,max)  -> threshold=(FA,0.2,0.8)\n"
             "clim: clim=(min,max)\n"
             "Remarque: Les valeurs multi-parties DOIVENT être entre parenthèses."
@@ -39,7 +40,7 @@ def main(argv=None):
         parser.error("--off-screen et --interactive sont mutuellement exclus")
 
     off_screen = args.off_screen or (not args.interactive and bool(args.screenshot or args.rotate))
-
+    print('Mode off-screen' if off_screen else 'Mode interactif')
     window_size = None
     if args.window_size:
         try:
@@ -63,6 +64,33 @@ def main(argv=None):
 
     if args.interactive or (not off_screen and not (args.screenshot or args.rotate)):
         vis.show()
+
+def _run_plotter(vis: TractViewer):
+    """
+    Exécute le plotter dans un thread séparé.
+    """
+    try:
+        vis.show()
+    except Exception as e:
+        print(f"Erreur dans le thread du plotter : {e}")
+
+def _coerce_value(value: str):
+    """
+    Convertit une valeur de chaîne en un type approprié (int, float, bool, None, ou str).
+    """
+    value = value.strip()
+    if value.lower() in ("true", "yes", "on"):
+        return True
+    if value.lower() in ("false", "no", "off"):
+        return False
+    if value.lower() in ("none", "null"):
+        return None
+    try:
+        if "." in value or "e" in value.lower():
+            return float(value)
+        return int(value)
+    except ValueError:
+        return value  # Retourne la chaîne brute si aucune conversion n'est possible
 
 if __name__ == "__main__":
     main()
@@ -195,7 +223,7 @@ def _parse_input_spec(spec: str):
 
     # Post-traitements supplémentaires
     # Normaliser certaines clés booléennes
-    for bkey in ("scalar_bar", "show_edges"):
+    for bkey in ("show_scalar_bar", "show_edges"):
         if bkey in meta:
             meta[bkey] = bool(meta[bkey])
 

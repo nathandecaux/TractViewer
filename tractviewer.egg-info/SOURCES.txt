@@ -3,6 +3,7 @@ pyproject.toml
 tests/test_import.py
 tractviewer/__init__.py
 tractviewer/cli.py
+tractviewer/core copy.py
 tractviewer/core.py
 tractviewer/enveloppe.py
 tractviewer.egg-info/PKG-INFO

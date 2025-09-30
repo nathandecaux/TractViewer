@@ -129,7 +129,7 @@ vis.add_dataset(
         "ambient": 0.6,
         "diffuse": 0.8,
         "specular": 0.1,
-        "scalar_bar": False,
+        "show_scalar_bar": False,
         "name": "anatomy",
         "style": "surface",
     }
@@ -144,7 +144,7 @@ vis.add_dataset(
         "clim": (40, 160),
         "opacity": 0.6,
         "threshold": ("length_mm", (50, 200)),  # filtre
-        "scalar_bar": True,
+        "show_scalar_bar": True,
         "name": "AF_left",
         "line_width": 2.0,
     }
@@ -173,7 +173,7 @@ vis.add_dataset(
         "color": "#00ffcc",
         "opacity": 0.35,
         "name": "AF_points_overlay",
-        "scalar_bar": False,
+        "show_scalar_bar": False,
     }
 )
 
@@ -219,7 +219,7 @@ vis2.capture_screenshot("out/quick.png")
 if os.environ.get("DISPLAY"):
     TractViewer(background="white").add_dataset(
         "bundle_AF_left.tck",
-        {"display_array": "length_mm", "cmap": "magma", "scalar_bar": True}
+        {"display_array": "length_mm", "cmap": "magma", "show_scalar_bar": True}
     ).show()
 ```
 
@@ -232,7 +232,7 @@ if os.environ.get("DISPLAY"):
 | clim | (min, max) pour l'échelle |
 | threshold | (array, (min,max)) applique un filtre |
 | opacity | float / séquence / str (ex: 'linear') |
-| scalar_bar | bool (affiche une seule barre globale la 1ère fois) |
+| show_scalar_bar | bool (affiche une seule barre globale la 1ère fois) |
 | line_width / point_size | Tailles primitives |
 | style | surface | wireframe | points |
 | points_as_spheres | Rendu sphères (points) |

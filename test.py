@@ -25,6 +25,8 @@ def _print_env():
     print("==================")
 
 if __name__ == "__main__":
+    import pyvistaqt as pvqt  # type: ignore
+
     # Forcer debug par défaut
     os.environ.setdefault("TRACTVIEWER_DEBUG", "1")
     os.environ.setdefault("TRACTVIEWER_NIFTI_COORD", "LPS")

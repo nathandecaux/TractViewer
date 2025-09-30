@@ -11,6 +11,11 @@ import subprocess
 import shutil
 import tempfile
 from tractviewer.enveloppe import enveloppe_minimale  # ajout
+# Ajout: imports debug
+import sys
+import traceback
+import faulthandler  # ajout
+
 
 try:
     import imageio.v2 as imageio  # GIF option
@@ -53,10 +58,34 @@ class TractViewer:
         self._scalar_bar_added = False
         self._font_color = self._choose_font_color(self.background)
         self._reference_affine: Optional[np.ndarray] = None  # 4x4 issue du premier NIfTI
+        self.window_size: Optional[Tuple[int,int]] = window_size
+        # Backend VTK détecté (classe du RenderWindow)
+        self._vtk_backend_class: Optional[str] = None
+        # Mode debug (1 par défaut, mettre TRACTVIEWER_DEBUG=0 pour désactiver)
+        self._debug: bool = os.environ.get("TRACTVIEWER_DEBUG", "1") != "0"
+        # Installer faulthandler / excepthook en debug
+        if self._debug:
+            try:
+                faulthandler.enable()
+            except Exception:
+                pass
+            self._install_sys_excepthook()
+            # Aide au debug du chargement des plugins Qt
+            os.environ.setdefault("QT_DEBUG_PLUGINS", "1")
         # Auto bascule headless si pas de DISPLAY
         if not self.off_screen and not os.environ.get("DISPLAY"):
             warnings.warn("Aucun DISPLAY détecté -> passage en mode off_screen.")
             self.off_screen = True
+        # Détection backend VTK (OSMesa/EGL => pas d'interactif)
+        backend_name, backend_is_headless = self._detect_vtk_backend()
+        self._vtk_backend_class = backend_name
+        if not self.off_screen and backend_is_headless:
+            warnings.warn(f"Backend VTK '{backend_name}' détecté (OSMesa/EGL) -> passage en mode off_screen (pas d'affichage interactif possible).")
+            self.off_screen = True
+        # Brancher la sortie VTK (erreurs/avertissements)
+        self._install_vtk_output_window()
+        if self._debug:
+            self._warn_debug("Init TractViewer terminé.", extra=self._debug_env_info())
 
     # ------------------------------
     # Chargement / ajout de datasets
@@ -68,6 +97,7 @@ class TractViewer:
         Extensions supportées supplémentaires:
           - .tck / .trk : tractographie -> vtkPolyData (lignes)
           - .nii / .nii.gz : NIfTI -> projection surface (isosurface)
+          - .png : image PNG -> ImageData avec couleurs RGB comme scalaires
         """
         if isinstance(obj, pv.DataSet):
             return obj
@@ -80,6 +110,8 @@ class TractViewer:
             return TractViewer._load_tract_file(path)
         if suffix in (".nii",) or double_suffix == ".nii.gz":
             return TractViewer._load_nifti_surface(path)
+        if suffix == ".png":
+            return TractViewer._load_png_as_vtk(path)
         return pv.read(path)
 
     # --- Chargement spécialisé tractographie ---
@@ -210,6 +242,94 @@ class TractViewer:
         surf.field_data["nifti_iso_value"] = np.array([iso_value], dtype=np.float32)
         return surf
 
+    @staticmethod
+    def _load_png_as_vtk(path: Path) -> pv.ImageData:
+        """Charge une image PNG et la convertit en VTK ImageData.
+        
+        Les couleurs RGB sont stockées comme scalaires 'rgb_colors'.
+        Crée aussi des arrays séparés 'red', 'green', 'blue' pour chaque canal.
+        """
+        try:
+            from PIL import Image
+        except ImportError:
+            try:
+                import imageio.v2 as imageio
+            except ImportError:
+                raise ImportError("PIL (Pillow) ou imageio requis pour charger des images PNG. 'pip install Pillow' ou 'pip install imageio'")
+        
+        # Charger l'image
+        try:
+            img = Image.open(str(path))
+            # Garder le mode original pour détecter la transparence
+            has_alpha = img.mode in ('RGBA', 'LA') or 'transparency' in img.info
+            # Convertir en RGBA pour gérer la transparence, puis extraire RGB
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            img_array = np.array(img)
+        except Exception:
+            # Fallback avec imageio si PIL échoue
+            img_array = imageio.imread(str(path))
+            if img_array.ndim == 2:
+                # Image en niveaux de gris -> convertir en RGBA
+                img_array = np.stack([img_array] * 3 + [np.full_like(img_array, 255)], axis=-1)
+                has_alpha = False
+            elif img_array.shape[2] == 3:
+                # RGB -> ajouter canal alpha
+                alpha = np.full(img_array.shape[:2], 255, dtype=img_array.dtype)
+                img_array = np.concatenate([img_array, alpha[..., None]], axis=-1)
+                has_alpha = False
+            else:
+                has_alpha = True
+        
+        height, width = img_array.shape[:2]
+        
+        # Créer ImageData VTK
+        grid = pv.ImageData()
+        grid.origin = (0.0, 0.0, 0.0)
+        grid.spacing = (1.0, 1.0, 1.0)
+        grid.dimensions = (width, height, 1)
+        
+        # Aplatir l'image en gardant l'ordre (x,y) compatible VTK
+        # VTK utilise un ordre différent, on transpose et ravel
+        img_transposed = np.transpose(img_array, (1, 0, 2))  # (width, height, 4)
+        
+        # Séparer RGBA
+        rgba_flat = img_transposed.reshape(-1, 4)
+        rgb_flat = rgba_flat[:, :3]
+        alpha_flat = rgba_flat[:, 3]
+        
+        # Marquer les pixels transparents (alpha < seuil)
+        transparency_threshold = 10  # pixels avec alpha < 10 considérés transparents
+        is_transparent = alpha_flat < transparency_threshold
+        
+        # Couleurs RGB combinées (pour affichage principal)
+        # Méthode 1: utiliser la luminance
+        luminance = 0.299 * rgb_flat[:, 0] + 0.587 * rgb_flat[:, 1] + 0.114 * rgb_flat[:, 2]
+        grid.point_data["luminance"] = luminance.astype(np.float32)
+        
+        # Méthode 2: encoder RGB en un seul entier pour préserver les couleurs
+        rgb_encoded = (rgb_flat[:, 0].astype(np.uint32) << 16) + \
+                      (rgb_flat[:, 1].astype(np.uint32) << 8) + \
+                      rgb_flat[:, 2].astype(np.uint32)
+        grid.point_data["rgb_encoded"] = rgb_encoded.astype(np.float32)
+        
+        # Canaux séparés
+        grid.point_data["red"] = rgb_flat[:, 0].astype(np.float32)
+        grid.point_data["green"] = rgb_flat[:, 1].astype(np.float32)
+        grid.point_data["blue"] = rgb_flat[:, 2].astype(np.float32)
+        grid.point_data["alpha"] = alpha_flat.astype(np.float32)
+        
+        # Marquer les pixels transparents
+        grid.point_data["is_transparent"] = is_transparent.astype(np.uint8)
+        
+        # Métadonnées
+        grid.field_data["image_width"] = np.array([width], dtype=np.int32)
+        grid.field_data["image_height"] = np.array([height], dtype=np.int32)
+        grid.field_data["has_transparency"] = np.array([has_alpha], dtype=np.bool_)
+        grid.field_data["source_file"] = np.array([str(path)], dtype=object)
+        
+        return grid
+
     def add_dataset(self, data: DataInput, params: Optional[ParamDict] = None, **kwargs):
         ds = self._load(data)
         params = dict(params or {})
@@ -298,79 +418,143 @@ class TractViewer:
             self._plotter = None
         self._plotter = pv.Plotter(off_screen=self.off_screen)
         self._plotter.set_background(self.background)
+        # Appliquer une taille de fenêtre si fournie
+        if self.window_size:
+            with contextlib.suppress(Exception):
+                self._plotter.window_size = tuple(map(int, self.window_size))
         # Recalcule (au cas où background modifié avant nouvel ensure)
         self._font_color = self._choose_font_color(self.background)
-        self._scalar_bar_added = False
-        for ds, prm in self._datasets:
-            mesh = ds
-            # Threshold si demandé
-            if "threshold" in prm and prm["threshold"]:
-                arr_name, (vmin, vmax) = prm["threshold"]
-                if arr_name not in mesh.array_names:
-                    raise ValueError(f"Array '{arr_name}' introuvable pour threshold.")
-                mesh = mesh.threshold(value=(vmin, vmax), scalars=arr_name, invert=False)
-
-            display_array = prm.get("display_array")
-            if display_array and display_array not in mesh.array_names:
-                raise ValueError(f"Array '{display_array}' introuvable dans dataset ({mesh.array_names}).")
-            if display_array:
-                # Assure que l'array est active (facilite la génération correcte de la scalar_bar)
-                try:
-                    mesh.set_active_scalars(display_array)
-                except Exception:
-                    pass
-
-            style = prm.get("style")
-            if style == "enveloppe":
-                try:
-                    mesh = enveloppe_minimale(mesh)
-                    # On force un style surface pour l'affichage
-                    prm_style_forced = "surface"
-                except Exception as e:
-                    warnings.warn(f"Echec enveloppe: {e}; fallback surface originale.")
-                    prm_style_forced = "surface"
-            else:
-                prm_style_forced = style
-
-            add_kwargs = dict(
-                scalars=display_array,
-                cmap=prm.get("cmap"),
-                clim=prm.get("clim"),
-                opacity=prm.get("opacity", 1.0),
-                show_edges=prm.get("show_edges", False),
-                # Une seule scalar bar globale (premier dataset éligible)
-                scalar_bar=bool(display_array) and prm.get("scalar_bar", True) and not self._scalar_bar_added,
-                name=prm.get("name"),
-                color=prm.get("color"),
-                style=prm_style_forced,
-            )
-            # Si rendu en points sans point_size défini, appliquer une valeur par défaut
-            if add_kwargs.get("style") == "points" and "point_size" not in prm:
-                add_kwargs["point_size"] = 5
-            # Option de rendu sphérique des points
-            if "points_as_spheres" in prm:
-                add_kwargs["points_as_spheres"] = prm["points_as_spheres"]
-            if add_kwargs["scalar_bar"]:
-                sb_args = prm.get("scalar_bar_args") or {}
-                sb_defaults = {
-                    "title": display_array or "",
-                    "n_labels": 5,
-                    "fmt": "%.2f",
-                    # Couleur de texte unifiée (ticks + titre)
-                    "color": self._font_color,
-                }
-                sb_defaults.update(sb_args)
-                add_kwargs["scalar_bar_args"] = sb_defaults
-            for opt in ("point_size", "line_width", "ambient", "specular", "diffuse"):
-                if opt in prm:
-                    add_kwargs[opt] = prm[opt]
-            self._plotter.add_mesh(mesh, **{k: v for k, v in add_kwargs.items() if v is not None})
-            if add_kwargs.get("scalar_bar"):
-                self._scalar_bar_added = True
-
+        # Remplir la scène avec les datasets
+        try:
+            self._populate_plotter()
+        except Exception:
+            self._warn_debug("Erreur lors de la population du plotter.", exc=sys.exc_info(), extra=self._debug_env_info())
+            raise
         # Ajuster caméra globale
         if self._datasets:
             self._plotter.camera_position = "xy"  # orientation initiale simple
+        # Log OpenGL après création
+        self._log_opengl_info(where="ensure_plotter")
+
+    # Ajout: factorisation de l'ajout de meshes
+    def _populate_plotter(self):
+        self._scalar_bar_added = False
+        for idx, (ds, prm) in enumerate(self._datasets):
+            try:
+                mesh = ds
+                # Threshold si demandé
+                if "threshold" in prm and prm["threshold"]:
+                    arr_name, (vmin, vmax) = prm["threshold"]
+                    if arr_name not in mesh.array_names:
+                        raise ValueError(f"Array '{arr_name}' introuvable pour threshold.")
+                    mesh = mesh.threshold(value=(vmin, vmax), scalars=arr_name, invert=False)
+
+                display_array = prm.get("display_array")
+                if display_array and display_array not in mesh.array_names:
+                    raise ValueError(f"Array '{display_array}' introuvable dans dataset ({mesh.array_names}).")
+
+                # Gestion spéciale pour les couleurs RGB encodées
+                if display_array == "rgb_encoded" and "is_transparent" in mesh.array_names:
+                    mesh = mesh.threshold(value=0.5, scalars="is_transparent", invert=True)
+
+                if display_array:
+                    with contextlib.suppress(Exception):
+                        mesh.set_active_scalars(display_array)
+
+                style = prm.get("style")
+                if style == "enveloppe":
+                    try:
+                        mesh = enveloppe_minimale(mesh)
+                        prm_style_forced = "surface"
+                    except Exception as e:
+                        self._warn_debug(f"Echec enveloppe (dataset {idx}, name={prm.get('name')}).", exc=sys.exc_info())
+                        prm_style_forced = "surface"
+                else:
+                    prm_style_forced = style
+
+                if display_array == "rgb_encoded":
+                    rgb_values = mesh.point_data[display_array].astype(np.uint32)
+                    red = (rgb_values >> 16) & 0xFF
+                    green = (rgb_values >> 8) & 0xFF
+                    blue = rgb_values & 0xFF
+                    colors = np.column_stack([red, green, blue]).astype(np.uint8)
+                    mesh.point_data["RGB"] = colors
+                    add_kwargs = dict(
+                        scalars="RGB",
+                        rgb=True,
+                        opacity=prm.get("opacity", 1.0),
+                        show_edges=prm.get("show_edges", False),
+                        show_scalar_bar=False,
+                        name=prm.get("name"),
+                        style=prm_style_forced,
+                    )
+                else:
+                    add_kwargs = dict(
+                        scalars=display_array,
+                        cmap=prm.get("cmap"),
+                        clim=prm.get("clim"),
+                        opacity=prm.get("opacity", 1.0),
+                        show_edges=prm.get("show_edges", False),
+                        show_scalar_bar=bool(display_array) and prm.get("scalar_bar", True) and not self._scalar_bar_added,
+                        name=prm.get("name"),
+                        color=prm.get("color"),
+                        style=prm_style_forced,
+                    )
+
+                if add_kwargs.get("style") == "points" and "point_size" not in prm:
+                    add_kwargs["point_size"] = 5
+                if "points_as_spheres" in prm:
+                    add_kwargs["points_as_spheres"] = prm["points_as_spheres"]
+                if add_kwargs.get("show_scalar_bar"):
+                    sb_args = prm.get("scalar_bar_args") or {}
+                    sb_defaults = {
+                        "title": display_array or "",
+                        "n_labels": 5,
+                        "fmt": "%.2f",
+                        "color": self._font_color,
+                    }
+                    sb_defaults.update(sb_args)
+                    add_kwargs["scalar_bar_args"] = sb_defaults
+                for opt in ("point_size", "line_width", "ambient", "specular", "diffuse"):
+                    if opt in prm:
+                        add_kwargs[opt] = prm[opt]
+
+                self._plotter.add_mesh(mesh, **{k: v for k, v in add_kwargs.items() if v is not None})
+                if add_kwargs.get("show_scalar_bar"):
+                    self._scalar_bar_added = True
+            except Exception:
+                self._warn_debug(
+                    f"Échec d'ajout du dataset index={idx}, name={prm.get('name')}.",
+                    exc=sys.exc_info(),
+                    extra=f"display_array={prm.get('display_array')}, style={prm.get('style')}, arrays={list(ds.array_names)}"
+                )
+                # Continuer avec les autres datasets
+                continue
+
+    # Ajout: reconstruction rapide des acteurs (sans fermer la fenêtre)
+    def _rebuild_actors(self):
+        if self._plotter is None:
+            return
+        # Sauvegarde de la caméra
+        try:
+            cam = getattr(self._plotter, "camera", None)
+            cam_state = None
+            if cam is not None:
+                cam_state = (tuple(cam.position), tuple(cam.focal_point), tuple(cam.view_up))
+            with contextlib.suppress(Exception):
+                self._plotter.clear()
+            self._populate_plotter()
+            if cam_state is not None:
+                with contextlib.suppress(Exception):
+                    self._plotter.camera.position = list(cam_state[0])
+                    self._plotter.camera.focal_point = list(cam_state[1])
+                    self._plotter.camera.view_up = list(cam_state[2])
+            with contextlib.suppress(Exception):
+                self._plotter.render()
+        except Exception:
+            self._warn_debug("Erreur _rebuild_actors.", exc=sys.exc_info())
+        else:
+            self._log_opengl_info(where="rebuild")
 
     # ------------------------------
     # Rotations caméra robustes
@@ -398,45 +582,455 @@ class TractViewer:
             else:
                 self._rotate_camera_fallback(axis='x', angle_deg=elevation_deg)
 
-    def _rotate_camera_fallback(self, axis: str, angle_deg: float):
-        """Fallback: rotation de la position caméra autour du focal point."""
-        cam = self._plotter.camera
-        pos = np.array(cam.position)
-        fp = np.array(cam.focal_point)
-        vec = pos - fp
-        angle = math.radians(angle_deg)
-        c, s = math.cos(angle), math.sin(angle)
-        if axis == 'z':
-            R = np.array([[c, -s, 0],
-                          [s,  c, 0],
-                          [0,  0, 1]])
-        elif axis == 'x':
-            R = np.array([[1, 0, 0],
-                          [0, c, -s],
-                          [0, s,  c]])
-        elif axis == 'y':
-            R = np.array([[ c, 0, s],
-                          [ 0, 1, 0],
-                          [-s, 0, c]])
-        else:
+    def _warn_debug(self, msg: str, exc: Optional[Tuple[type, BaseException, Optional[object]]] = None, extra: Optional[str] = None):
+        """Affiche un message de debug avec traceback si exc fournie."""
+        if not self._debug:
             return
-        new_pos = fp + R.dot(vec)
-        cam.position = new_pos.tolist()
-        # Optionnel: pas de modification du view_up ici (préserver stabilité)
+        full_msg = f"[TractViewer DEBUG] {msg}"
+        if extra:
+            full_msg += f" | {extra}"
+        print(full_msg, file=sys.stderr)
+        if exc:
+            etype, evalue, etb = exc
+            traceback.print_exception(etype, evalue, etb, file=sys.stderr)
+        
+    def _debug_env_info(self) -> str:
+        """Retourne une chaîne avec des infos d'environnement utiles pour le debug."""
+        info = []
+        info.append(f"Python {sys.version.split()[0]}")
+        try:
+            import pyvista
+            info.append(f"pyvista {pyvista.__version__}")
+        except Exception:
+            info.append("pyvista non installé")
+        try:
+            import vtk
+            info.append(f"VTK {vtk.vtkVersion().GetVTKVersion()}")
+        except Exception:
+            info.append("VTK non installé")
+        if self._vtk_backend_class:
+            info.append(f"VTK backend: {self._vtk_backend_class}")
+        info.append(f"off_screen={self.off_screen}")
+        if os.environ.get("DISPLAY"):
+            info.append(f"DISPLAY={os.environ.get('DISPLAY')}")
+        else:
+            info.append("Pas de DISPLAY")
+        return " | ".join(info)
+    
+    def _install_sys_excepthook(self):
+        """Installe un excepthook global verbeux (une seule fois)."""
+        if getattr(self, "_excepthook_installed", False):
+            return
+        old_hook = sys.excepthook
+        def _hook(exc_type, exc, tb):
+            try:
+                self._warn_debug("Exception non interceptée", exc=(exc_type, exc, tb))
+            finally:
+                old_hook(exc_type, exc, tb)
+        try:
+            sys.excepthook = _hook
+            self._excepthook_installed = True
+        except Exception:
+            pass
 
-    def _apply_rotation(self, azimuth_deg: float, elevation_deg: float):
-        """Rotation + rendu (indispensable off_screen pour que la caméra se propage aux captures)."""
-        self._rotate_camera(azimuth_deg=azimuth_deg, elevation_deg=elevation_deg)
-        self._plotter.render()
+    def _install_vtk_output_window(self):
+        """Redirige la sortie VTK (erreurs/avertissements) vers stderr ou un fichier."""
+        try:
+            import vtk
+            # Afficher les warnings VTK
+            try:
+                vtk.vtkObject.GlobalWarningDisplayOn()
+            except Exception:
+                pass
+            log_path = os.environ.get("TRACTVIEWER_VTK_LOG")
+            if log_path:
+                fow = vtk.vtkFileOutputWindow()
+                fow.SetFileName(log_path)
+                vtk.vtkOutputWindow.SetInstance(fow)
+                if self._debug:
+                    self._warn_debug(f"VTK log redirigé vers {log_path}")
+            else:
+                # Laisser VTK écrire sur stderr (comportement par défaut)
+                pass
+        except Exception:
+            self._warn_debug("Échec configuration VTK OutputWindow.", exc=sys.exc_info())
+
+    def _log_opengl_info(self, where: str = ""):
+        """Log des infos OpenGL (vendor/renderer/version) si dispo."""
+        if not self._debug or self._plotter is None:
+            return
+        try:
+            rw = getattr(self._plotter, "ren_win", None) or getattr(self._plotter, "render_window", None)
+            if rw is None:
+                return
+            # Certaines builds exposent ces méthodes sur vtkOpenGLRenderWindow
+            getters = {
+                "Vendor": getattr(rw, "GetOpenGLVendor", None),
+                "Renderer": getattr(rw, "GetOpenGLRenderer", None),
+                "Version": getattr(rw, "GetOpenGLVersion", None),
+            }
+            parts = []
+            for k, fn in getters.items():
+                if callable(fn):
+                    with contextlib.suppress(Exception):
+                        parts.append(f"{k}={fn()}")
+            if parts:
+                self._warn_debug(f"OpenGL [{where}] " + ", ".join(parts))
+        except Exception:
+            self._warn_debug("Échec récupération infos OpenGL.", exc=sys.exc_info())
+
+    def _install_qt_message_handler(self, QtCore):
+        """Redirige les messages Qt vers stderr (compatible PyQt5/PyQt6)."""
+        if not self._debug:
+            return
+        try:
+            qInstallMessageHandler = getattr(QtCore, "qInstallMessageHandler", None)
+            if not qInstallMessageHandler:
+                return
+            # Construire une table de correspondance robuste
+            try:
+                QtMsgType = QtCore.QtMsgType
+            except Exception:
+                QtMsgType = None
+            def _label(mode):
+                try:
+                    val = int(mode)
+                except Exception:
+                    try:
+                        # PyQt6: Enum possède un attribut name
+                        return getattr(mode, "name", str(mode))
+                    except Exception:
+                        return str(mode)
+                mapping = {
+                    getattr(QtMsgType, "QtDebugMsg", 0): "Debug",
+                    getattr(QtMsgType, "QtInfoMsg", 4): "Info",
+                    getattr(QtMsgType, "QtWarningMsg", 1): "Warning",
+                    getattr(QtMsgType, "QtCriticalMsg", 2): "Critical",
+                    getattr(QtMsgType, "QtFatalMsg", 3): "Fatal",
+                } if QtMsgType else {0: "Debug", 1: "Warning", 2: "Critical", 3: "Fatal", 4: "Info"}
+                return mapping.get(val, str(val))
+            def qt_message_handler(mode, context, message):
+                try:
+                    print(f"[Qt { _label(mode) }] {message}", file=sys.stderr)
+                except Exception:
+                    pass
+            qInstallMessageHandler(qt_message_handler)
+            self._warn_debug("Qt message handler installé.")
+        except Exception:
+            self._warn_debug("Échec installation du handler Qt.", exc=sys.exc_info())
+
+    # Ajout: panneau Qt des paramètres
+    def _import_qt(self):
+        """Importe QtCore/QtWidgets (priorité à PyQt5 pour éviter les conflits)."""
+        try:
+            from PyQt5 import QtCore, QtWidgets  # type: ignore
+            return QtCore, QtWidgets
+        except ImportError:
+            try:
+                from PyQt6 import QtCore, QtWidgets  # type: ignore
+                return QtCore, QtWidgets
+            except ImportError as e:
+                raise ImportError("Ni PyQt5 ni PyQt6 disponibles. Installez l'un des deux.") from e
+
+    def _open_param_panel_qt(self):
+        """
+        Ouvre une petite fenêtre Qt avec un tableau permettant d'ajuster
+        pour chaque dataset: display_array, opacity, style, show_edges, scalar_bar.
+        """
+        try:
+            QtCore, QtWidgets = self._import_qt()
+        except Exception as e:
+            self._warn_debug("Qt indisponible: panneau non créé.", exc=sys.exc_info())
+            return
+
+        self._param_widget = QtWidgets.QWidget()
+        self._param_widget.setWindowTitle("TractViewer - Paramètres")
+        layout = QtWidgets.QVBoxLayout(self._param_widget)
+
+        table = QtWidgets.QTableWidget(self._param_widget)
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(["Nom", "display_array", "opacity", "style", "show_edges", "scalar_bar"])
+        table.setRowCount(len(self._datasets))
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
+
+        # Timer pour regrouper les rafraîchissements
+        if not hasattr(self, "_qt_update_timer"):
+            self._qt_update_timer = QtCore.QTimer(self._param_widget)
+            self._qt_update_timer.setSingleShot(True)
+            self._qt_update_timer.setInterval(120)
+            self._qt_update_timer.timeout.connect(self._rebuild_actors)
+
+        styles = ["surface", "wireframe", "points", "enveloppe"]
+
+        for row, (ds, prm) in enumerate(self._datasets):
+            # Nom (lecture seule)
+            name_item = QtWidgets.QTableWidgetItem(str(prm.get("name")))
+            try:
+                name_item.setFlags(name_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)  # PyQt6
+            except Exception:
+                name_item.setFlags(name_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)  # PyQt5/PySide
+            table.setItem(row, 0, name_item)
+
+            # display_array
+            arrays = ["(None)"] + list(ds.array_names)
+            cb_arr = QtWidgets.QComboBox(table)
+            cb_arr.addItems(arrays)
+            current = prm.get("display_array") or "(None)"
+            if current not in arrays:
+                cb_arr.addItem(current)
+            cb_arr.setCurrentText(current)
+            cb_arr.currentTextChanged.connect(lambda text, r=row: self._on_ui_change(r, "display_array", None if text == "(None)" else text))
+            table.setCellWidget(row, 1, cb_arr)
+
+            # opacity (0..100)
+            slider = QtWidgets.QSlider(table)
+            try:
+                slider.setOrientation(QtCore.Qt.Orientation.Horizontal)
+            except Exception:
+                slider.setOrientation(QtCore.Qt.Horizontal)
+            slider.setMinimum(0)
+            slider.setMaximum(100)
+            slider.setValue(int(float(prm.get("opacity", 1.0)) * 100))
+            slider.valueChanged.connect(lambda v, r=row: self._on_ui_change(r, "opacity", float(v) / 100.0, schedule=True))
+            table.setCellWidget(row, 2, slider)
+
+            # style
+            cb_style = QtWidgets.QComboBox(table)
+            cb_style.addItems(styles)
+            cb_style.setCurrentText(prm.get("style") or "surface")
+            cb_style.currentTextChanged.connect(lambda text, r=row: self._on_ui_change(r, "style", text))
+            table.setCellWidget(row, 3, cb_style)
+
+            # show_edges
+            cb_edges = QtWidgets.QCheckBox(table)
+            cb_edges.setChecked(bool(prm.get("show_edges", False)))
+            cb_edges.stateChanged.connect(lambda _s, r=row, w=cb_edges: self._on_ui_change(r, "show_edges", bool(w.isChecked())))
+            table.setCellWidget(row, 4, cb_edges)
+
+            # scalar_bar
+            cb_sbar = QtWidgets.QCheckBox(table)
+            cb_sbar.setChecked(bool(prm.get("scalar_bar", True)))
+            cb_sbar.stateChanged.connect(lambda _s, r=row, w=cb_sbar: self._on_ui_change(r, "scalar_bar", bool(w.isChecked())))
+            table.setCellWidget(row, 5, cb_sbar)
+
+        # Boutons
+        btns = QtWidgets.QHBoxLayout()
+        btn_refresh = QtWidgets.QPushButton("Rafraîchir", self._param_widget)
+        btn_refresh.clicked.connect(self._rebuild_actors)
+        btns.addWidget(btn_refresh)
+        btn_close = QtWidgets.QPushButton("Fermer", self._param_widget)
+        btn_close.clicked.connect(self._param_widget.close)
+        btns.addStretch(1)
+        btns.addWidget(btn_close)
+        layout.addLayout(btns)
+
+        self._param_widget.setLayout(layout)
+        self._param_widget.resize(760, 280)
+        self._param_widget.show()
+
+    def _on_ui_change(self, row: int, key: str, value, schedule: bool = False):
+        """Applique la modif de paramètre puis (re)construit."""
+        try:
+            _ds, prm = self._datasets[row]
+            prm[key] = value
+            if schedule:
+                self._schedule_rebuild()
+            else:
+                self._rebuild_actors()
+        except Exception:
+            self._warn_debug(f"Changement UI ignoré (row={row}, key={key}, value={value}).", exc=sys.exc_info())
+
+    def _schedule_rebuild(self):
+        """Regroupe les mises à jour via un timer Qt si dispo."""
+        t = getattr(self, "_qt_update_timer", None)
+        if t is not None:
+            t.start()
+        else:
+            self._rebuild_actors()
+
+    # ------------------------------
+    # Construction de la scène
+    # ------------------------------
+    def _ensure_plotter(self):
+        # Reconstruit si plotter absent ou déjà fermé
+        if self._plotter is not None and not getattr(self._plotter, "_closed", False):
+            return
+        # Si un ancien plotter fermé reste référencé, on l'oublie
+        if self._plotter is not None and getattr(self._plotter, "_closed", False):
+            self._plotter = None
+        self._plotter = pv.Plotter(off_screen=self.off_screen)
+        self._plotter.set_background(self.background)
+        # Appliquer une taille de fenêtre si fournie
+        if self.window_size:
+            with contextlib.suppress(Exception):
+                self._plotter.window_size = tuple(map(int, self.window_size))
+        # Recalcule (au cas où background modifié avant nouvel ensure)
+        self._font_color = self._choose_font_color(self.background)
+        # Remplir la scène avec les datasets
+        try:
+            self._populate_plotter()
+        except Exception:
+            self._warn_debug("Erreur lors de la population du plotter.", exc=sys.exc_info(), extra=self._debug_env_info())
+            raise
+        # Ajuster caméra globale
+        if self._datasets:
+            self._plotter.camera_position = "xy"  # orientation initiale simple
+        # Log OpenGL après création
+        self._log_opengl_info(where="ensure_plotter")
+
+    # Ajout: factorisation de l'ajout de meshes
+    def _populate_plotter(self):
+        self._scalar_bar_added = False
+        for idx, (ds, prm) in enumerate(self._datasets):
+            try:
+                mesh = ds
+                # Threshold si demandé
+                if "threshold" in prm and prm["threshold"]:
+                    arr_name, (vmin, vmax) = prm["threshold"]
+                    if arr_name not in mesh.array_names:
+                        raise ValueError(f"Array '{arr_name}' introuvable pour threshold.")
+                    mesh = mesh.threshold(value=(vmin, vmax), scalars=arr_name, invert=False)
+
+                display_array = prm.get("display_array")
+                if display_array and display_array not in mesh.array_names:
+                    raise ValueError(f"Array '{display_array}' introuvable dans dataset ({mesh.array_names}).")
+
+                # Gestion spéciale pour les couleurs RGB encodées
+                if display_array == "rgb_encoded" and "is_transparent" in mesh.array_names:
+                    mesh = mesh.threshold(value=0.5, scalars="is_transparent", invert=True)
+
+                if display_array:
+                    with contextlib.suppress(Exception):
+                        mesh.set_active_scalars(display_array)
+
+                style = prm.get("style")
+                if style == "enveloppe":
+                    try:
+                        mesh = enveloppe_minimale(mesh)
+                        prm_style_forced = "surface"
+                    except Exception as e:
+                        self._warn_debug(f"Echec enveloppe (dataset {idx}, name={prm.get('name')}).", exc=sys.exc_info())
+                        prm_style_forced = "surface"
+                else:
+                    prm_style_forced = style
+
+                if display_array == "rgb_encoded":
+                    rgb_values = mesh.point_data[display_array].astype(np.uint32)
+                    red = (rgb_values >> 16) & 0xFF
+                    green = (rgb_values >> 8) & 0xFF
+                    blue = rgb_values & 0xFF
+                    colors = np.column_stack([red, green, blue]).astype(np.uint8)
+                    mesh.point_data["RGB"] = colors
+                    add_kwargs = dict(
+                        scalars="RGB",
+                        rgb=True,
+                        opacity=prm.get("opacity", 1.0),
+                        show_edges=prm.get("show_edges", False),
+                        show_scalar_bar=False,
+                        name=prm.get("name"),
+                        style=prm_style_forced,
+                    )
+                else:
+                    add_kwargs = dict(
+                        scalars=display_array,
+                        cmap=prm.get("cmap"),
+                        clim=prm.get("clim"),
+                        opacity=prm.get("opacity", 1.0),
+                        show_edges=prm.get("show_edges", False),
+                        show_scalar_bar=bool(display_array) and prm.get("scalar_bar", True) and not self._scalar_bar_added,
+                        name=prm.get("name"),
+                        color=prm.get("color"),
+                        style=prm_style_forced,
+                    )
+
+                if add_kwargs.get("style") == "points" and "point_size" not in prm:
+                    add_kwargs["point_size"] = 5
+                if "points_as_spheres" in prm:
+                    add_kwargs["points_as_spheres"] = prm["points_as_spheres"]
+                if add_kwargs.get("show_scalar_bar"):
+                    sb_args = prm.get("scalar_bar_args") or {}
+                    sb_defaults = {
+                        "title": display_array or "",
+                        "n_labels": 5,
+                        "fmt": "%.2f",
+                        "color": self._font_color,
+                    }
+                    sb_defaults.update(sb_args)
+                    add_kwargs["scalar_bar_args"] = sb_defaults
+                for opt in ("point_size", "line_width", "ambient", "specular", "diffuse"):
+                    if opt in prm:
+                        add_kwargs[opt] = prm[opt]
+
+                self._plotter.add_mesh(mesh, **{k: v for k, v in add_kwargs.items() if v is not None})
+                if add_kwargs.get("show_scalar_bar"):
+                    self._scalar_bar_added = True
+            except Exception:
+                self._warn_debug(
+                    f"Échec d'ajout du dataset index={idx}, name={prm.get('name')}.",
+                    exc=sys.exc_info(),
+                    extra=f"display_array={prm.get('display_array')}, style={prm.get('style')}, arrays={list(ds.array_names)}"
+                )
+                # Continuer avec les autres datasets
+                continue
+
+    # Ajout: reconstruction rapide des acteurs (sans fermer la fenêtre)
+    def _rebuild_actors(self):
+        if self._plotter is None:
+            return
+        # Sauvegarde de la caméra
+        try:
+            cam = getattr(self._plotter, "camera", None)
+            cam_state = None
+            if cam is not None:
+                cam_state = (tuple(cam.position), tuple(cam.focal_point), tuple(cam.view_up))
+            with contextlib.suppress(Exception):
+                self._plotter.clear()
+            self._populate_plotter()
+            if cam_state is not None:
+                with contextlib.suppress(Exception):
+                    self._plotter.camera.position = list(cam_state[0])
+                    self._plotter.camera.focal_point = list(cam_state[1])
+                    self._plotter.camera.view_up = list(cam_state[2])
+            with contextlib.suppress(Exception):
+                self._plotter.render()
+        except Exception:
+            self._warn_debug("Erreur _rebuild_actors.", exc=sys.exc_info())
+        else:
+            self._log_opengl_info(where="rebuild")
 
     # ------------------------------
     # Affichage interactif
     # ------------------------------
     def show(self, **show_kwargs):
-        self._ensure_plotter()
+        # Log de contexte
+        if self._debug:
+            self._warn_debug("Appel show()", extra=self._debug_env_info())
+        # Si off_screen: avertissement et fallback inchangé
         if self.off_screen:
-            warnings.warn("off_screen=True : aucune fenêtre interactive ne s'ouvrira. Passez off_screen=False pour interaction.")
-        return self._plotter.show(**show_kwargs)
+            try:
+                self._ensure_plotter()
+            except Exception:
+                self._warn_debug("Échec _ensure_plotter() en off_screen.", exc=sys.exc_info())
+                raise
+            reason = ""
+            if self._vtk_backend_class:
+                reason = f" (backend: {self._vtk_backend_class})"
+            warnings.warn("off_screen=True : aucune fenêtre interactive ne s'ouvrira."
+                          f"{reason} Utilisez capture_screenshot() ou record_rotation(), ou installez un VTK avec support écran.")
+            return self._plotter.show(**show_kwargs, interactive=True)
+
+        # Utiliser pv.Plotter pour un affichage interactif dans le terminal
+        try:
+            self._warn_debug("Création Plotter interactif...")
+            self._ensure_plotter()
+            # Forcer le rendu avant l'affichage
+            self._plotter.render()
+            self._warn_debug("Plotter interactif prêt à être affiché.")
+            self._plotter.show(**show_kwargs, interactive=True)
+        except Exception:
+            self._warn_debug("Échec création/initialisation Plotter interactif.", exc=sys.exc_info(), extra=self._debug_env_info())
+            raise
 
     # ------------------------------
     # Capture d'écran
@@ -604,7 +1198,7 @@ class TractViewer:
                 elev_step = elevation if (elevation and i < n_frames / 2) else (-elevation if elevation else 0.0)
                 self._apply_rotation(azimuth_deg=step, elevation_deg=elev_step)
                 frames.append(self._plotter.screenshot(return_img=True))
-            imageio.mimsave(output_path, frames, fps=fps)
+            imageio.mimsave(output_path, frames, fps=fps, loop=100) # loop=0 pour boucle infinie
             # Restauration taille
             if original_size is not None and target_size is not None:
                 with contextlib.suppress(Exception):
@@ -729,14 +1323,36 @@ class TractViewer:
         return out
 
     @staticmethod
+    def _detect_vtk_backend() -> Tuple[str, bool]:
+        """
+        Retourne (class_name, is_headless). is_headless=True pour OSMesa/EGL.
+        """
+        try:
+            import vtk  # import local pour éviter coût si inutilisé
+            rw = vtk.vtkRenderWindow()
+            cls = (rw.GetClassName() or "").lower()
+            # Exemples possibles:
+            # - 'vtkxopenglrenderwindow' (X11)
+            # - 'vtkwglopenglrenderwindow' (Windows)
+            # - 'vtkcocoaopenglrenderwindow' (macOS)
+            # - 'vtkosopenglrenderwindow' (OSMesa)
+            # - 'vtkeglopenglrenderwindow' (EGL)
+            if "osopengl" in cls or "osmesa" in cls:
+                return (rw.GetClassName(), True)
+            if "egl" in cls:
+                return (rw.GetClassName(), True)
+            # Backends avec affichage
+            if any(k in cls for k in ("xopengl", "wglopengl", "cocoaopengl")):
+                return (rw.GetClassName(), False)
+            # Inconnu: ne pas forcer
+            return (rw.GetClassName() or "unknown", False)
+        except Exception:
+            return ("unknown", False)
+
+    @staticmethod
     def _choose_font_color(bg) -> str:
         """
         Retourne 'black' ou 'white' selon la luminance du background.
-        Implémentation robuste sans dépendre de pyvista.parse_color (absent sur certaines versions).
-        Accepte:
-          - noms de couleurs (si matplotlib installé)
-          - code hex (#RRGGBB ou #RGB)
-          - tuple/list (r,g,b[,a]) avec composantes 0-1 ou 0-255
         """
         def _norm_rgb(rgb):
             if max(rgb) > 1.0:
@@ -781,79 +1397,3 @@ class TractViewer:
 
         # Fallback par défaut
         return "black"
-
-
-# -------------------------------------------------
-# Exemple d'utilisation (protégé par __main__)
-# -------------------------------------------------
-if __name__ == "__main__":
-    #Set TRACTVIEWER_NIFTI_COORD=LPS in env to have nifti in LPS
-
-    vis = TractViewer(background="black", off_screen=False)
-    vis.add_dataset(
-        "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/long_central_line/summed_AF_left_centroids.vtk",
-        {
-            "display_array": None,
-            "color": "red",
-            "opacity": 1.0,
-            "line_width": 10,
-            "scalar_bar": True,  # mappé vers scalar_bar
-            "name": "associations_enveloppe",
-            "style": "surface",
-        }
-    ).add_dataset(
-        "/home/ndecaux/NAS_EMPENN/share/projects/actidep/bids/derivatives/hcp_association_24pts/sub-01001/tracto/sub-01001_bundle-AFleft_desc-associations_model-MCM_space-HCP_tracto.vtk",
-        {
-            "display_array": "point_index",
-            "cmap": "viridis",
-            "opacity": 0.5,
-            "scalar_bar": True,  # mappé vers scalar_bar
-            "name": "associations",
-            "style": "surface",
-        }
-    ).add_dataset(
-        "/home/ndecaux/NAS_EMPENN/share/projects/actidep/bids/derivatives/hcp_association_24pts/sub-01001/tracto/sub-01001_bundle-AFleft_desc-centroids_model-MCM_space-subject_tracto.vtk",
-        {
-            "display_array": "point_index",
-            "cmap": "viridis",
-            "point_size": 20,
-            "opacity": 1.0,
-            "name": "centroids",
-            "style": "points",
-            "points_as_spheres": True,
-        }
-    ).add_dataset(
-        "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/average_anat.nii.gz",
-        {
-            "display_array": "intensity",
-            "cmap": "gray",
-            "clim": (200, 800),
-            "opacity": 0.3,
-            "scalar_bar": False,
-            "name": "anatomy",
-            "ambient": 0.6,
-            "specular": 0.1,
-            "diffuse": 0.8,
-            "style": "surface",
-        }
-    )
-    # .add_dataset(
-    #     "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/summed_AF_left.tck",
-    #     {
-    #         "display_array": "length_mm",
-    #         "cmap": "plasma",
-    #         "clim": (50, 150),
-    #         "opacity": 0.6,
-    #         "scalar_bar": True,
-    #         "name": "summed_AF",
-    #         "style": "surface",
-    #         "ambient": 0.3,
-    #         "specular": 0.2,
-    #         "diffuse": 0.5,
-    #     }
-    # )
-    
-    # vis.capture_screenshot("capture.png")
-    # vis.record_rotation("rotation.mp4", n_frames=240, step=1.5, quality=10)
-    vis.show()  # si rendu interactif possible
-    # vis.show()  # si rendu interactif possible

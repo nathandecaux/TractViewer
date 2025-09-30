@@ -121,3 +121,172 @@ vis.add_dataset(
 	{"point_radius": 0.5, "color": "red", "opacity": 0.6}
 )
 ```
+
+### Exemples API avancés
+
+```python
+from pathlib import Path
+import os
+from tractviewer import TractViewer
+
+# (Optionnel) Forcer coord LPS pour aligner avec certains pipelines neuro
+os.environ["TRACTVIEWER_NIFTI_COORD"] = "LPS"
+# (Optionnel) Valeur d'iso manuelle pour surfaces NIfTI
+# os.environ["TRACTVIEWER_NIFTI_ISO"] = "700"
+
+vis = TractViewer(background="black", off_screen=True)
+
+# 1. Chargement d'une anatomie (surface iso) + réglages matériaux
+vis.add_dataset(
+    "anat.nii.gz",
+    {
+        "display_array": "intensity",
+        "cmap": "gray",
+        "clim": (200, 800),
+        "opacity": 0.25,
+        "ambient": 0.6,
+        "diffuse": 0.8,
+        "specular": 0.1,
+        "show_scalar_bar": False,
+        "name": "anatomy",
+        "style": "surface",
+    }
+)
+
+# 2. Tractographie (vtk / tck / trk) avec colormap sur longueur + threshold
+vis.add_dataset(
+    "bundle_AF_left.tck",
+    {
+        "display_array": "length_mm",
+        "cmap": "plasma",
+        "clim": (40, 160),
+        "opacity": 0.6,
+        "threshold": ("length_mm", (50, 200)),  # filtre
+        "show_scalar_bar": True,
+        "name": "AF_left",
+        "line_width": 2.0,
+    }
+)
+
+# 3. Centroides en points rendus comme sphères
+vis.add_dataset(
+    "centroids.vtk",
+    {
+        "style": "points",
+        "points_as_spheres": True,
+        "point_size": 18,          # si style points "legacy"
+        "color": "yellow",
+        "opacity": 1.0,
+        "name": "centroids",
+    }
+)
+
+# 4. Même fichier tract mais rendu en points (glyph implicites) sans scalaires
+vis.add_dataset(
+    "bundle_AF_left.tck",
+    {
+        "style": "points",
+        "points_as_spheres": False,
+        "point_size": 4,
+        "color": "#00ffcc",
+        "opacity": 0.35,
+        "name": "AF_points_overlay",
+        "show_scalar_bar": False,
+    }
+)
+
+# 5. Liste des arrays disponibles par dataset (utile pour choisir display_array)
+print(vis.list_arrays())
+
+# 6. Capture d'écran
+vis.capture_screenshot("out/capture.png")
+
+# 7. Rotation vidéo (MP4) avec qualité élevée + CRF
+vis.record_rotation(
+    "out/rotation.mp4",
+    n_frames=240,      # nombre d'images
+    step=1.5,          # incrément azimut
+    elevation=0.0,     # mettre p.ex 10 pour basculer en 1ère moitié puis -10
+    fps=30,
+    quality=9,         # (imageio) 0-10
+    codec="libx264",
+    crf=18,            # (si pas de bitrate)
+    supersample=2,     # rendu interne 2x puis compressé (plus net)
+    window_size=(960, 720),
+)
+
+# 8. GIF
+vis.record_rotation(
+    "out/rotation.gif",
+    n_frames=120,
+    step=3,
+    gif=True,
+    fps=20
+)
+
+# 9. Reconstruction d’une nouvelle instance via from_paths
+paths = ["anat.nii.gz", "bundle_AF_left.tck"]
+params = [
+    {"display_array": "intensity", "cmap": "gray", "opacity": 0.2},
+    {"display_array": "length_mm", "cmap": "viridis", "opacity": 0.7},
+]
+vis2 = TractViewer.from_paths(paths, params, background="white", off_screen=True)
+vis2.capture_screenshot("out/quick.png")
+
+# 10. Interaction (si DISPLAY dispo)
+if os.environ.get("DISPLAY"):
+    TractViewer(background="white").add_dataset(
+        "bundle_AF_left.tck",
+        {"display_array": "length_mm", "cmap": "magma", "show_scalar_bar": True}
+    ).show()
+```
+
+### Paramètres principaux (API add_dataset)
+
+| Clé | Description |
+|-----|-------------|
+| display_array | Nom d'un array (point/cell) à colorer |
+| cmap | Colormap matplotlib ou liste de couleurs |
+| clim | (min, max) pour l'échelle |
+| threshold | (array, (min,max)) applique un filtre |
+| opacity | float / séquence / str (ex: 'linear') |
+| show_scalar_bar | bool (affiche une seule barre globale la 1ère fois) |
+| line_width / point_size | Tailles primitives |
+| style | surface | wireframe | points |
+| points_as_spheres | Rendu sphères (points) |
+| ambient / diffuse / specular | Matériau lumière |
+| name | Identifiant interne |
+| color | Couleur fixe (si pas de display_array) |
+
+### record_rotation (paramètres utiles)
+
+| Paramètre | Effet |
+|-----------|-------|
+| n_frames | Nombre d'images |
+| step | Incrément azimut (°) par frame |
+| elevation | Bascules (±) sur première/ seconde moitié |
+| gif | True => GIF sinon vidéo |
+| fps | Images/sec |
+| codec | libx264, libvpx_vp9, mpeg4... (fallback auto) |
+| crf | Qualité (H.264/265/VP9) si pas de bitrate |
+| bitrate | Débit cible '8M' (override crf) |
+| supersample | Sur-échantillonnage spatial |
+| window_size | Taille finale (avant supersample) |
+| quality | Param imageio (0-10) |
+| auto_codec_fallback | Essayez codecs alternatifs |
+
+### Variables d'environnement supportées
+
+| Variable | Effet |
+|----------|-------|
+| PYVISTA_OFF_SCREEN=1 | Rendu sans fenêtre |
+| TRACTVIEWER_NIFTI_COORD=LPS | Conversion points NIfTI/tract en LPS |
+| TRACTVIEWER_NIFTI_ISO=val | Force valeur iso pour surface NIfTI |
+| DISPLAY (unset) | Force off_screen automatique |
+
+### Bonnes pratiques
+
+- Toujours vérifier list_arrays() avant de choisir un scalaire.
+- Utiliser supersample=2 pour vidéos nettes + CRF bas (18-22).
+- Pour clusters sans X11: exporter PYVISTA_OFF_SCREEN=1.
+- Pour forcer mode LPS cohérent entre surfaces et tracto: TRACTVIEWER_NIFTI_COORD=LPS.

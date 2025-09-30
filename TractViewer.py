@@ -32,7 +32,7 @@ class TractViewer:
       - threshold: (str, (min,max))  filtrage sur un array => applique un threshold
       - opacity: float | str | Sequence[float]
       - show_edges: bool
-      - scalar_bar: bool
+      - show_scalar_bar: bool
       - point_size / line_width: tailles optionnelles
       - ambient / specular / diffuse: réglages matériaux
       - style: 'surface' | 'wireframe' | 'points'   (nouveau; défaut surface)
@@ -47,7 +47,7 @@ class TractViewer:
         self.background = background
         self.off_screen = off_screen
         self._plotter: Optional[pv.Plotter] = None
-        self._scalar_bar_added = False
+        self._show_scalar_bar_added = False
         self._font_color = self._choose_font_color(self.background)
         self._reference_affine: Optional[np.ndarray] = None  # 4x4 issue du premier NIfTI
         # Auto bascule headless si pas de DISPLAY
@@ -295,7 +295,7 @@ class TractViewer:
         self._plotter.set_background(self.background)
         # Recalcule (au cas où background modifié avant nouvel ensure)
         self._font_color = self._choose_font_color(self.background)
-        self._scalar_bar_added = False
+        self._show_scalar_bar_added = False
         for ds, prm in self._datasets:
             mesh = ds
             # Threshold si demandé
@@ -309,7 +309,7 @@ class TractViewer:
             if display_array and display_array not in mesh.array_names:
                 raise ValueError(f"Array '{display_array}' introuvable dans dataset ({mesh.array_names}).")
             if display_array:
-                # Assure que l'array est active (facilite la génération correcte de la scalar_bar)
+                # Assure que l'array est active (facilite la génération correcte de la show_scalar_bar)
                 try:
                     mesh.set_active_scalars(display_array)
                 except Exception:
@@ -323,7 +323,7 @@ class TractViewer:
                 opacity=prm.get("opacity", 1.0),
                 show_edges=prm.get("show_edges", False),
                 # Une seule scalar bar globale (premier dataset éligible)
-                scalar_bar=bool(display_array) and prm.get("scalar_bar", True) and not self._scalar_bar_added,
+                show_scalar_bar=bool(display_array) and prm.get("show_scalar_bar", True) and not self._show_scalar_bar_added,
                 name=prm.get("name"),
                 color=prm.get("color"),
                 style=prm.get("style"),  # 'surface' | 'wireframe' | 'points'
@@ -334,8 +334,8 @@ class TractViewer:
             # Option de rendu sphérique des points
             if "points_as_spheres" in prm:
                 add_kwargs["points_as_spheres"] = prm["points_as_spheres"]
-            if add_kwargs["scalar_bar"]:
-                sb_args = prm.get("scalar_bar_args") or {}
+            if add_kwargs["show_scalar_bar"]:
+                sb_args = prm.get("show_scalar_bar_args") or {}
                 sb_defaults = {
                     "title": display_array or "",
                     "n_labels": 5,
@@ -344,13 +344,13 @@ class TractViewer:
                     "color": self._font_color,
                 }
                 sb_defaults.update(sb_args)
-                add_kwargs["scalar_bar_args"] = sb_defaults
+                add_kwargs["show_scalar_bar_args"] = sb_defaults
             for opt in ("point_size", "line_width", "ambient", "specular", "diffuse"):
                 if opt in prm:
                     add_kwargs[opt] = prm[opt]
             self._plotter.add_mesh(mesh, **{k: v for k, v in add_kwargs.items() if v is not None})
-            if add_kwargs.get("scalar_bar"):
-                self._scalar_bar_added = True
+            if add_kwargs.get("show_scalar_bar"):
+                self._show_scalar_bar_added = True
 
         # Ajuster caméra globale
         if self._datasets:
@@ -781,7 +781,7 @@ if __name__ == "__main__":
             "cmap": "viridis",
             "threshold": ("point_index", (0, 24)),
             "opacity": 0.9,
-            "scalar_bar": True,  # mappé vers scalar_bar
+            "show_scalar_bar": True,  # mappé vers show_scalar_bar
             "name": "associations",
         }
     ).add_dataset(
@@ -802,14 +802,14 @@ if __name__ == "__main__":
             "cmap": "gray",
             "clim": (200, 800),
             "opacity": 0.3,
-            "scalar_bar": False,
+            "show_scalar_bar": False,
             "name": "anatomy",
             "ambient": 0.6,
             "specular": 0.1,
             "diffuse": 0.8,
             "style": "surface",
         }
-    #Cli version : display_array=intensity,cmap=gray,opacity=0.3,scalar_bar=0,name=anatomy,ambient=0.6,specular=0.1,diffuse=0.8,style=surface
+    #Cli version : display_array=intensity,cmap=gray,opacity=0.3,show_scalar_bar=0,name=anatomy,ambient=0.6,specular=0.1,diffuse=0.8,style=surface
     ).add_dataset(
         "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/summed_AF_left.tck",
         {
@@ -817,7 +817,7 @@ if __name__ == "__main__":
             "cmap": "plasma",
             "clim": (50, 150),
             "opacity": 0.6,
-            "scalar_bar": True,
+            "show_scalar_bar": True,
             "name": "summed_AF",
             "style": "surface",
             "ambient": 0.3,

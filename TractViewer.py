@@ -43,6 +43,7 @@ class TractViewer:
       - off_screen: bool (pour rendu sans interface, ex: serveur)
     """
     def __init__(self, background: str = "white", off_screen: bool = False):
+        print('COUCOUCOUCOCUCOU')
         self._datasets: List[Tuple[pv.DataSet, ParamDict]] = []
         self.background = background
         self.off_screen = off_screen

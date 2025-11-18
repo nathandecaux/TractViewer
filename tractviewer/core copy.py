@@ -10,7 +10,6 @@ import pyvista as pv
 import subprocess
 import shutil
 import tempfile
-from PIL import Image
 from tractviewer.enveloppe import enveloppe_minimale  # ajout
 # Ajout: imports debug
 import sys
@@ -55,7 +54,6 @@ class TractViewer:
         self._datasets: List[Tuple[pv.DataSet, ParamDict]] = []
         self.background = background
         self.off_screen = off_screen
-        self._debug: bool = True
         self._plotter: Optional[pv.Plotter] = None
         self._scalar_bar_added = False
         self._font_color = self._choose_font_color(self.background)
@@ -71,6 +69,7 @@ class TractViewer:
                 faulthandler.enable()
             except Exception:
                 pass
+            self._install_sys_excepthook()
             # Aide au debug du chargement des plugins Qt
             os.environ.setdefault("QT_DEBUG_PLUGINS", "1")
         # Auto bascule headless si pas de DISPLAY
@@ -83,7 +82,10 @@ class TractViewer:
         if not self.off_screen and backend_is_headless:
             warnings.warn(f"Backend VTK '{backend_name}' détecté (OSMesa/EGL) -> passage en mode off_screen (pas d'affichage interactif possible).")
             self.off_screen = True
-
+        # Brancher la sortie VTK (erreurs/avertissements)
+        self._install_vtk_output_window()
+        if self._debug:
+            self._warn_debug("Init TractViewer terminé.", extra=self._debug_env_info())
 
     # ------------------------------
     # Chargement / ajout de datasets
@@ -164,99 +166,6 @@ class TractViewer:
         # Point data
         poly.point_data["point_index"] = np.array(point_stream_index, dtype=np.int32)
         return poly
-
-    @staticmethod
-    def _write_gif_with_ffmpeg(
-        frames: List[np.ndarray],
-        output_path: Union[str, Path],
-        fps: int = 10,
-        scale_width: int = 320,
-        optimize: bool = True
-    ) -> str:
-        """
-        Write frames to an infinite loop GIF using ffmpeg with palette optimization.
-        
-        Args:
-            frames: List of numpy arrays (H, W, 3) representing RGB frames
-            output_path: Output path for the GIF
-            fps: Frames per second
-            scale_width: Width for scaling (height computed to preserve aspect ratio)
-            optimize: Use palette optimization for better quality/size
-        
-        Returns:
-            str: Path to the created GIF
-        """
-        ffmpeg_bin = shutil.which("ffmpeg")
-        if not ffmpeg_bin:
-            raise RuntimeError("ffmpeg not found. Install it: apt-get install ffmpeg")
-        print('USING FFMPEG BINARY:', ffmpeg_bin)
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Create temporary directory for frames
-        temp_dir = Path(tempfile.mkdtemp(prefix="tractviewer_gif_"))
-        
-        try:
-            # Save frames as PNG
-            for i, frame in enumerate(frames):
-                frame_path = temp_dir / f"frame{i:05d}.png"
-                if imageio is not None:
-                    imageio.imwrite(frame_path, frame)
-                else:
-                    from PIL import Image
-                    Image.fromarray(frame).save(frame_path)
-            
-            if optimize:
-                # Two-pass approach with palette generation for better quality
-                palette_path = temp_dir / "palette.png"
-                
-                # Generate palette
-                palette_cmd = [
-                    ffmpeg_bin,
-                    "-y",
-                    "-framerate", str(fps),
-                    "-i", str(temp_dir / "frame%05d.png"),
-                    "-vf", f"fps={fps},scale={scale_width}:-1:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
-                    str(palette_path)
-                ]
-                
-                proc = subprocess.run(palette_cmd, capture_output=True, text=True)
-                if proc.returncode != 0:
-                    raise RuntimeError(f"Palette generation failed:\n{proc.stderr}")
-                
-                # Create GIF with palette
-                gif_cmd = [
-                    ffmpeg_bin,
-                    "-y",
-                    "-framerate", str(fps),
-                    "-i", str(temp_dir / "frame%05d.png"),
-                    "-i", str(palette_path),
-                    "-filter_complex", f"fps={fps},scale={scale_width}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
-                    "-loop", "0",  # 0 = infinite loop
-                    str(output_path)
-                ]
-            else:
-                # Simple one-pass approach
-                gif_cmd = [
-                    ffmpeg_bin,
-                    "-y",
-                    "-framerate", str(fps),
-                    "-i", str(temp_dir / "frame%05d.png"),
-                    "-vf", f"fps={fps},scale={scale_width}:-1:flags=lanczos",
-                    "-loop", "0",  # 0 = infinite loop
-                    str(output_path)
-                ]
-            
-            proc = subprocess.run(gif_cmd, capture_output=True, text=True)
-            if proc.returncode != 0:
-                raise RuntimeError(f"GIF creation failed:\n{proc.stderr}")
-            
-            return str(output_path)
-        
-        finally:
-            # Cleanup temporary directory
-            with contextlib.suppress(Exception):
-                shutil.rmtree(temp_dir)
 
     # --- Chargement / projection NIfTI ---
     @staticmethod
@@ -524,6 +433,8 @@ class TractViewer:
         # Ajuster caméra globale
         if self._datasets:
             self._plotter.camera_position = "xy"  # orientation initiale simple
+        # Log OpenGL après création
+        self._log_opengl_info(where="ensure_plotter")
 
     # Ajout: factorisation de l'ajout de meshes
     def _populate_plotter(self):
@@ -671,109 +582,423 @@ class TractViewer:
             else:
                 self._rotate_camera_fallback(axis='x', angle_deg=elevation_deg)
 
-    def _rotate_camera_fallback(self, axis='z', angle_deg=0.0):
-        """Rotation caméra fallback par manipulation directe de position."""
-        if not angle_deg:
+    def _warn_debug(self, msg: str, exc: Optional[Tuple[type, BaseException, Optional[object]]] = None, extra: Optional[str] = None):
+        """Affiche un message de debug avec traceback si exc fournie."""
+        if not self._debug:
             return
-        cam = self._plotter.camera
-        pos = np.array(cam.position)
-        focal = np.array(cam.focal_point)
-        # Vecteur caméra -> focal
-        vec = focal - pos
-        # Matrice de rotation selon l'axe
-        angle_rad = math.radians(angle_deg)
-        if axis.lower() == 'x':
-            rot_matrix = np.array([
-                [1, 0, 0],
-                [0, math.cos(angle_rad), -math.sin(angle_rad)],
-                [0, math.sin(angle_rad), math.cos(angle_rad)]
-            ])
-        elif axis.lower() == 'y':
-            rot_matrix = np.array([
-                [math.cos(angle_rad), 0, math.sin(angle_rad)],
-                [0, 1, 0],
-                [-math.sin(angle_rad), 0, math.cos(angle_rad)]
-            ])
-        else:  # axis == 'z'
-            rot_matrix = np.array([
-                [math.cos(angle_rad), -math.sin(angle_rad), 0],
-                [math.sin(angle_rad), math.cos(angle_rad), 0],
-                [0, 0, 1]
-            ])
-        # Appliquer rotation
-        new_vec = rot_matrix @ vec
-        cam.position = focal - new_vec
-
-    def rotate_mesh(self, rotation_x: float = 0.0, rotation_y: float = 0.0, rotation_z: float = 0.0):
-        """
-        Applique une rotation aux meshes de tous les datasets.
+        full_msg = f"[TractViewer DEBUG] {msg}"
+        if extra:
+            full_msg += f" | {extra}"
+        print(full_msg, file=sys.stderr)
+        if exc:
+            etype, evalue, etb = exc
+            traceback.print_exception(etype, evalue, etb, file=sys.stderr)
         
-        Args:
-            rotation_x: rotation autour de l'axe X en degrés
-            rotation_y: rotation autour de l'axe Y en degrés  
-            rotation_z: rotation autour de l'axe Z en degrés
-        """
-        if not any([rotation_x, rotation_y, rotation_z]):
+    def _debug_env_info(self) -> str:
+        """Retourne une chaîne avec des infos d'environnement utiles pour le debug."""
+        info = []
+        info.append(f"Python {sys.version.split()[0]}")
+        try:
+            import pyvista
+            info.append(f"pyvista {pyvista.__version__}")
+        except Exception:
+            info.append("pyvista non installé")
+        try:
+            import vtk
+            info.append(f"VTK {vtk.vtkVersion().GetVTKVersion()}")
+        except Exception:
+            info.append("VTK non installé")
+        if self._vtk_backend_class:
+            info.append(f"VTK backend: {self._vtk_backend_class}")
+        info.append(f"off_screen={self.off_screen}")
+        if os.environ.get("DISPLAY"):
+            info.append(f"DISPLAY={os.environ.get('DISPLAY')}")
+        else:
+            info.append("Pas de DISPLAY")
+        return " | ".join(info)
+    
+    def _install_sys_excepthook(self):
+        """Installe un excepthook global verbeux (une seule fois)."""
+        if getattr(self, "_excepthook_installed", False):
             return
-            
-        for ds, prm in self._datasets:
-            self._apply_mesh_rotation(ds, rotation_x, rotation_y, rotation_z)
-        
-        # Invalider le plotter pour forcer la reconstruction
-        self._plotter = None
+        old_hook = sys.excepthook
+        def _hook(exc_type, exc, tb):
+            try:
+                self._warn_debug("Exception non interceptée", exc=(exc_type, exc, tb))
+            finally:
+                old_hook(exc_type, exc, tb)
+        try:
+            sys.excepthook = _hook
+            self._excepthook_installed = True
+        except Exception:
+            pass
 
-    def _apply_mesh_rotation(self, dataset: pv.DataSet, rx: float, ry: float, rz: float):
-        """Applique les rotations successives X, Y, Z au dataset."""
-        points = dataset.points.copy()
-        
-        # Rotation X
-        if rx != 0.0:
-            angle_rad = math.radians(rx)
-            cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
-            rot_x = np.array([
-                [1, 0, 0],
-                [0, cos_a, -sin_a],
-                [0, sin_a, cos_a]
-            ])
-            points = points @ rot_x.T
-        
-        # Rotation Y
-        if ry != 0.0:
-            angle_rad = math.radians(ry)
-            cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
-            rot_y = np.array([
-                [cos_a, 0, sin_a],
-                [0, 1, 0],
-                [-sin_a, 0, cos_a]
-            ])
-            points = points @ rot_y.T
-        
-        # Rotation Z
-        if rz != 0.0:
-            angle_rad = math.radians(rz)
-            cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
-            rot_z = np.array([
-                [cos_a, -sin_a, 0],
-                [sin_a, cos_a, 0],
-                [0, 0, 1]
-            ])
-            points = points @ rot_z.T
-        
-        dataset.points = points
+    def _install_vtk_output_window(self):
+        """Redirige la sortie VTK (erreurs/avertissements) vers stderr ou un fichier."""
+        try:
+            import vtk
+            # Afficher les warnings VTK
+            try:
+                vtk.vtkObject.GlobalWarningDisplayOn()
+            except Exception:
+                pass
+            log_path = os.environ.get("TRACTVIEWER_VTK_LOG")
+            if log_path:
+                fow = vtk.vtkFileOutputWindow()
+                fow.SetFileName(log_path)
+                vtk.vtkOutputWindow.SetInstance(fow)
+                if self._debug:
+                    self._warn_debug(f"VTK log redirigé vers {log_path}")
+            else:
+                # Laisser VTK écrire sur stderr (comportement par défaut)
+                pass
+        except Exception:
+            self._warn_debug("Échec configuration VTK OutputWindow.", exc=sys.exc_info())
 
-    def _backup_mesh_state(self) -> List[np.ndarray]:
-        """Sauvegarde l'état actuel des points de tous les datasets."""
-        return [ds.points.copy() for ds, _ in self._datasets]
+    def _log_opengl_info(self, where: str = ""):
+        """Log des infos OpenGL (vendor/renderer/version) si dispo."""
+        if not self._debug or self._plotter is None:
+            return
+        try:
+            rw = getattr(self._plotter, "ren_win", None) or getattr(self._plotter, "render_window", None)
+            if rw is None:
+                return
+            # Certaines builds exposent ces méthodes sur vtkOpenGLRenderWindow
+            getters = {
+                "Vendor": getattr(rw, "GetOpenGLVendor", None),
+                "Renderer": getattr(rw, "GetOpenGLRenderer", None),
+                "Version": getattr(rw, "GetOpenGLVersion", None),
+            }
+            parts = []
+            for k, fn in getters.items():
+                if callable(fn):
+                    with contextlib.suppress(Exception):
+                        parts.append(f"{k}={fn()}")
+            if parts:
+                self._warn_debug(f"OpenGL [{where}] " + ", ".join(parts))
+        except Exception:
+            self._warn_debug("Échec récupération infos OpenGL.", exc=sys.exc_info())
 
-    def _restore_mesh_state(self, backup: List[np.ndarray]):
-        """Restaure l'état des points depuis une sauvegarde."""
-        for (ds, _), points in zip(self._datasets, backup):
-            ds.points = points
+    def _install_qt_message_handler(self, QtCore):
+        """Redirige les messages Qt vers stderr (compatible PyQt5/PyQt6)."""
+        if not self._debug:
+            return
+        try:
+            qInstallMessageHandler = getattr(QtCore, "qInstallMessageHandler", None)
+            if not qInstallMessageHandler:
+                return
+            # Construire une table de correspondance robuste
+            try:
+                QtMsgType = QtCore.QtMsgType
+            except Exception:
+                QtMsgType = None
+            def _label(mode):
+                try:
+                    val = int(mode)
+                except Exception:
+                    try:
+                        # PyQt6: Enum possède un attribut name
+                        return getattr(mode, "name", str(mode))
+                    except Exception:
+                        return str(mode)
+                mapping = {
+                    getattr(QtMsgType, "QtDebugMsg", 0): "Debug",
+                    getattr(QtMsgType, "QtInfoMsg", 4): "Info",
+                    getattr(QtMsgType, "QtWarningMsg", 1): "Warning",
+                    getattr(QtMsgType, "QtCriticalMsg", 2): "Critical",
+                    getattr(QtMsgType, "QtFatalMsg", 3): "Fatal",
+                } if QtMsgType else {0: "Debug", 1: "Warning", 2: "Critical", 3: "Fatal", 4: "Info"}
+                return mapping.get(val, str(val))
+            def qt_message_handler(mode, context, message):
+                try:
+                    print(f"[Qt { _label(mode) }] {message}", file=sys.stderr)
+                except Exception:
+                    pass
+            qInstallMessageHandler(qt_message_handler)
+            self._warn_debug("Qt message handler installé.")
+        except Exception:
+            self._warn_debug("Échec installation du handler Qt.", exc=sys.exc_info())
 
-    def _apply_rotation(self, azimuth_deg: float, elevation_deg: float):
-        """Rotation + rendu (indispensable off_screen pour que la caméra se propage aux captures)."""
-        self._rotate_camera(azimuth_deg=azimuth_deg, elevation_deg=elevation_deg)
-        self._plotter.render()
+    # Ajout: panneau Qt des paramètres
+    def _import_qt(self):
+        """Importe QtCore/QtWidgets (priorité à PyQt5 pour éviter les conflits)."""
+        try:
+            from PyQt5 import QtCore, QtWidgets  # type: ignore
+            return QtCore, QtWidgets
+        except ImportError:
+            try:
+                from PyQt6 import QtCore, QtWidgets  # type: ignore
+                return QtCore, QtWidgets
+            except ImportError as e:
+                raise ImportError("Ni PyQt5 ni PyQt6 disponibles. Installez l'un des deux.") from e
+
+    def _open_param_panel_qt(self):
+        """
+        Ouvre une petite fenêtre Qt avec un tableau permettant d'ajuster
+        pour chaque dataset: display_array, opacity, style, show_edges, scalar_bar.
+        """
+        try:
+            QtCore, QtWidgets = self._import_qt()
+        except Exception as e:
+            self._warn_debug("Qt indisponible: panneau non créé.", exc=sys.exc_info())
+            return
+
+        self._param_widget = QtWidgets.QWidget()
+        self._param_widget.setWindowTitle("TractViewer - Paramètres")
+        layout = QtWidgets.QVBoxLayout(self._param_widget)
+
+        table = QtWidgets.QTableWidget(self._param_widget)
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(["Nom", "display_array", "opacity", "style", "show_edges", "scalar_bar"])
+        table.setRowCount(len(self._datasets))
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
+
+        # Timer pour regrouper les rafraîchissements
+        if not hasattr(self, "_qt_update_timer"):
+            self._qt_update_timer = QtCore.QTimer(self._param_widget)
+            self._qt_update_timer.setSingleShot(True)
+            self._qt_update_timer.setInterval(120)
+            self._qt_update_timer.timeout.connect(self._rebuild_actors)
+
+        styles = ["surface", "wireframe", "points", "enveloppe"]
+
+        for row, (ds, prm) in enumerate(self._datasets):
+            # Nom (lecture seule)
+            name_item = QtWidgets.QTableWidgetItem(str(prm.get("name")))
+            try:
+                name_item.setFlags(name_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)  # PyQt6
+            except Exception:
+                name_item.setFlags(name_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)  # PyQt5/PySide
+            table.setItem(row, 0, name_item)
+
+            # display_array
+            arrays = ["(None)"] + list(ds.array_names)
+            cb_arr = QtWidgets.QComboBox(table)
+            cb_arr.addItems(arrays)
+            current = prm.get("display_array") or "(None)"
+            if current not in arrays:
+                cb_arr.addItem(current)
+            cb_arr.setCurrentText(current)
+            cb_arr.currentTextChanged.connect(lambda text, r=row: self._on_ui_change(r, "display_array", None if text == "(None)" else text))
+            table.setCellWidget(row, 1, cb_arr)
+
+            # opacity (0..100)
+            slider = QtWidgets.QSlider(table)
+            try:
+                slider.setOrientation(QtCore.Qt.Orientation.Horizontal)
+            except Exception:
+                slider.setOrientation(QtCore.Qt.Horizontal)
+            slider.setMinimum(0)
+            slider.setMaximum(100)
+            slider.setValue(int(float(prm.get("opacity", 1.0)) * 100))
+            slider.valueChanged.connect(lambda v, r=row: self._on_ui_change(r, "opacity", float(v) / 100.0, schedule=True))
+            table.setCellWidget(row, 2, slider)
+
+            # style
+            cb_style = QtWidgets.QComboBox(table)
+            cb_style.addItems(styles)
+            cb_style.setCurrentText(prm.get("style") or "surface")
+            cb_style.currentTextChanged.connect(lambda text, r=row: self._on_ui_change(r, "style", text))
+            table.setCellWidget(row, 3, cb_style)
+
+            # show_edges
+            cb_edges = QtWidgets.QCheckBox(table)
+            cb_edges.setChecked(bool(prm.get("show_edges", False)))
+            cb_edges.stateChanged.connect(lambda _s, r=row, w=cb_edges: self._on_ui_change(r, "show_edges", bool(w.isChecked())))
+            table.setCellWidget(row, 4, cb_edges)
+
+            # scalar_bar
+            cb_sbar = QtWidgets.QCheckBox(table)
+            cb_sbar.setChecked(bool(prm.get("scalar_bar", True)))
+            cb_sbar.stateChanged.connect(lambda _s, r=row, w=cb_sbar: self._on_ui_change(r, "scalar_bar", bool(w.isChecked())))
+            table.setCellWidget(row, 5, cb_sbar)
+
+        # Boutons
+        btns = QtWidgets.QHBoxLayout()
+        btn_refresh = QtWidgets.QPushButton("Rafraîchir", self._param_widget)
+        btn_refresh.clicked.connect(self._rebuild_actors)
+        btns.addWidget(btn_refresh)
+        btn_close = QtWidgets.QPushButton("Fermer", self._param_widget)
+        btn_close.clicked.connect(self._param_widget.close)
+        btns.addStretch(1)
+        btns.addWidget(btn_close)
+        layout.addLayout(btns)
+
+        self._param_widget.setLayout(layout)
+        self._param_widget.resize(760, 280)
+        self._param_widget.show()
+
+    def _on_ui_change(self, row: int, key: str, value, schedule: bool = False):
+        """Applique la modif de paramètre puis (re)construit."""
+        try:
+            _ds, prm = self._datasets[row]
+            prm[key] = value
+            if schedule:
+                self._schedule_rebuild()
+            else:
+                self._rebuild_actors()
+        except Exception:
+            self._warn_debug(f"Changement UI ignoré (row={row}, key={key}, value={value}).", exc=sys.exc_info())
+
+    def _schedule_rebuild(self):
+        """Regroupe les mises à jour via un timer Qt si dispo."""
+        t = getattr(self, "_qt_update_timer", None)
+        if t is not None:
+            t.start()
+        else:
+            self._rebuild_actors()
+
+    # ------------------------------
+    # Construction de la scène
+    # ------------------------------
+    def _ensure_plotter(self):
+        # Reconstruit si plotter absent ou déjà fermé
+        if self._plotter is not None and not getattr(self._plotter, "_closed", False):
+            return
+        # Si un ancien plotter fermé reste référencé, on l'oublie
+        if self._plotter is not None and getattr(self._plotter, "_closed", False):
+            self._plotter = None
+        self._plotter = pv.Plotter(off_screen=self.off_screen)
+        self._plotter.set_background(self.background)
+        # Appliquer une taille de fenêtre si fournie
+        if self.window_size:
+            with contextlib.suppress(Exception):
+                self._plotter.window_size = tuple(map(int, self.window_size))
+        # Recalcule (au cas où background modifié avant nouvel ensure)
+        self._font_color = self._choose_font_color(self.background)
+        # Remplir la scène avec les datasets
+        try:
+            self._populate_plotter()
+        except Exception:
+            self._warn_debug("Erreur lors de la population du plotter.", exc=sys.exc_info(), extra=self._debug_env_info())
+            raise
+        # Ajuster caméra globale
+        if self._datasets:
+            self._plotter.camera_position = "xy"  # orientation initiale simple
+        # Log OpenGL après création
+        self._log_opengl_info(where="ensure_plotter")
+
+    # Ajout: factorisation de l'ajout de meshes
+    def _populate_plotter(self):
+        self._scalar_bar_added = False
+        for idx, (ds, prm) in enumerate(self._datasets):
+            try:
+                mesh = ds
+                # Threshold si demandé
+                if "threshold" in prm and prm["threshold"]:
+                    arr_name, (vmin, vmax) = prm["threshold"]
+                    if arr_name not in mesh.array_names:
+                        raise ValueError(f"Array '{arr_name}' introuvable pour threshold.")
+                    mesh = mesh.threshold(value=(vmin, vmax), scalars=arr_name, invert=False)
+
+                display_array = prm.get("display_array")
+                if display_array and display_array not in mesh.array_names:
+                    raise ValueError(f"Array '{display_array}' introuvable dans dataset ({mesh.array_names}).")
+
+                # Gestion spéciale pour les couleurs RGB encodées
+                if display_array == "rgb_encoded" and "is_transparent" in mesh.array_names:
+                    mesh = mesh.threshold(value=0.5, scalars="is_transparent", invert=True)
+
+                if display_array:
+                    with contextlib.suppress(Exception):
+                        mesh.set_active_scalars(display_array)
+
+                style = prm.get("style")
+                if style == "enveloppe":
+                    try:
+                        mesh = enveloppe_minimale(mesh)
+                        prm_style_forced = "surface"
+                    except Exception as e:
+                        self._warn_debug(f"Echec enveloppe (dataset {idx}, name={prm.get('name')}).", exc=sys.exc_info())
+                        prm_style_forced = "surface"
+                else:
+                    prm_style_forced = style
+
+                if display_array == "rgb_encoded":
+                    rgb_values = mesh.point_data[display_array].astype(np.uint32)
+                    red = (rgb_values >> 16) & 0xFF
+                    green = (rgb_values >> 8) & 0xFF
+                    blue = rgb_values & 0xFF
+                    colors = np.column_stack([red, green, blue]).astype(np.uint8)
+                    mesh.point_data["RGB"] = colors
+                    add_kwargs = dict(
+                        scalars="RGB",
+                        rgb=True,
+                        opacity=prm.get("opacity", 1.0),
+                        show_edges=prm.get("show_edges", False),
+                        show_scalar_bar=False,
+                        name=prm.get("name"),
+                        style=prm_style_forced,
+                    )
+                else:
+                    add_kwargs = dict(
+                        scalars=display_array,
+                        cmap=prm.get("cmap"),
+                        clim=prm.get("clim"),
+                        opacity=prm.get("opacity", 1.0),
+                        show_edges=prm.get("show_edges", False),
+                        show_scalar_bar=bool(display_array) and prm.get("scalar_bar", True) and not self._scalar_bar_added,
+                        name=prm.get("name"),
+                        color=prm.get("color"),
+                        style=prm_style_forced,
+                    )
+
+                if add_kwargs.get("style") == "points" and "point_size" not in prm:
+                    add_kwargs["point_size"] = 5
+                if "points_as_spheres" in prm:
+                    add_kwargs["points_as_spheres"] = prm["points_as_spheres"]
+                if add_kwargs.get("show_scalar_bar"):
+                    sb_args = prm.get("scalar_bar_args") or {}
+                    sb_defaults = {
+                        "title": display_array or "",
+                        "n_labels": 5,
+                        "fmt": "%.2f",
+                        "color": self._font_color,
+                    }
+                    sb_defaults.update(sb_args)
+                    add_kwargs["scalar_bar_args"] = sb_defaults
+                for opt in ("point_size", "line_width", "ambient", "specular", "diffuse"):
+                    if opt in prm:
+                        add_kwargs[opt] = prm[opt]
+
+                self._plotter.add_mesh(mesh, **{k: v for k, v in add_kwargs.items() if v is not None})
+                if add_kwargs.get("show_scalar_bar"):
+                    self._scalar_bar_added = True
+            except Exception:
+                self._warn_debug(
+                    f"Échec d'ajout du dataset index={idx}, name={prm.get('name')}.",
+                    exc=sys.exc_info(),
+                    extra=f"display_array={prm.get('display_array')}, style={prm.get('style')}, arrays={list(ds.array_names)}"
+                )
+                # Continuer avec les autres datasets
+                continue
+
+    # Ajout: reconstruction rapide des acteurs (sans fermer la fenêtre)
+    def _rebuild_actors(self):
+        if self._plotter is None:
+            return
+        # Sauvegarde de la caméra
+        try:
+            cam = getattr(self._plotter, "camera", None)
+            cam_state = None
+            if cam is not None:
+                cam_state = (tuple(cam.position), tuple(cam.focal_point), tuple(cam.view_up))
+            with contextlib.suppress(Exception):
+                self._plotter.clear()
+            self._populate_plotter()
+            if cam_state is not None:
+                with contextlib.suppress(Exception):
+                    self._plotter.camera.position = list(cam_state[0])
+                    self._plotter.camera.focal_point = list(cam_state[1])
+                    self._plotter.camera.view_up = list(cam_state[2])
+            with contextlib.suppress(Exception):
+                self._plotter.render()
+        except Exception:
+            self._warn_debug("Erreur _rebuild_actors.", exc=sys.exc_info())
+        else:
+            self._log_opengl_info(where="rebuild")
+
     # ------------------------------
     # Affichage interactif
     # ------------------------------
@@ -810,37 +1035,12 @@ class TractViewer:
     # ------------------------------
     # Capture d'écran
     # ------------------------------
-    def capture_screenshot(self, 
-                         output_path: Union[str, Path], 
-                         transparent: bool = False,
-                         rotation_x: float = 0.0,
-                         rotation_y: float = 0.0, 
-                         rotation_z: float = 0.0):
-        """
-        Capture une image avec rotation optionnelle du mesh.
-        
-        Args:
-            output_path: chemin de sortie
-            transparent: fond transparent
-            rotation_x/y/z: rotations du mesh en degrés avant capture
-        """
-        # Sauvegarder l'état original
-        backup = None
-        if any([rotation_x, rotation_y, rotation_z]):
-            backup = self._backup_mesh_state()
-            self.rotate_mesh(rotation_x, rotation_y, rotation_z)
-        
-        try:
-            self._ensure_plotter()
-            output_path = Path(output_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            img = self._plotter.screenshot(filename=str(output_path), transparent_background=transparent)
-            return img
-        finally:
-            # Restaurer l'état original
-            if backup is not None:
-                self._restore_mesh_state(backup)
-                self._plotter = None  # Forcer reconstruction
+    def capture_screenshot(self, output_path: Union[str, Path], transparent: bool = False):
+        self._ensure_plotter()
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img = self._plotter.screenshot(filename=str(output_path), transparent_background=transparent)
+        return img
 
     # ------------------------------
     # Enregistrement vidéo / GIF
@@ -931,7 +1131,7 @@ class TractViewer:
         self,
         output_path: Union[str, Path],
         n_frames: int = 180,
-        step: float = None,
+        step: float = 2.0,
         elevation: float = 0.0,
         gif: bool = False,
         fps: int = 30,
@@ -944,203 +1144,174 @@ class TractViewer:
         crf: Optional[int] = None,
         auto_codec_fallback: bool = True,
         prefer_software: bool = True,
-        off_screen: Optional[bool] = True,
-        rotation_x: float = 0.0,
-        rotation_y: float = 0.0,
-        rotation_z: float = 0.0,
     ):
         """
-        Effectue une rotation azimutale de la caméra et enregistre avec rotation optionnelle du mesh.
-        
-        Args supplémentaires:
-            rotation_x/y/z: rotations du mesh en degrés appliquées avant l'enregistrement
+        Effectue une rotation azimutale de la caméra et enregistre.
+        gif=True => GIF via imageio.
+        gif=False => MP4/AVI via:
+          1) imageio-ffmpeg si dispo (flux direct)
+          2) sinon binaire ffmpeg si présent
+          3) sinon erreur explicite
+
+        Paramètres qualité supplémentaires:
+          window_size: (w,h) taille finale souhaitée (sans supersample). Si None, taille actuelle.
+          supersample: facteur (>1) pour rendre en (w*factor, h*factor) puis encoder (améliore netteté).
+          anti_aliasing: active l'anti-aliasing (si supporté).
+          codec: encodeur vidéo ffmpeg/imageio (ex: libx264, mpeg4, libvpx_vp9).
+          bitrate: ex '8M' (si défini, ffmpeg utilisera ce débit).
+          crf: qualité cible (0-51, plus bas = meilleur) si codec type x264/x265 (ignoré si bitrate défini).
+          quality: param interne imageio (0-10) — conserver élevé (8-10) pour limiter la perte.
+         auto_codec_fallback: si True, sélection automatique d'un codec disponible si le demandé manque.
         """
-        # Sauvegarder l'état original et appliquer rotation mesh si demandée
-        backup = None
-        if any([rotation_x, rotation_y, rotation_z]):
-            backup = self._backup_mesh_state()
-            self.rotate_mesh(rotation_x, rotation_y, rotation_z)
+        self._ensure_plotter()
+        output_path = Path(output_path)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".gif" if gif else ".mp4")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        try:
-            if off_screen:
-                self.off_screen = True
-
-            self._ensure_plotter()
-            output_path = Path(output_path)
-            if not output_path.suffix:
-                output_path = output_path.with_suffix(".gif" if gif else ".mp4")
+        # Gestion résolution / supersampling
+        original_size = getattr(self._plotter, "window_size", None)
+        target_size = None
+        if window_size:
+            w, h = window_size
+            w = int(w)
+            h = int(h)
+            if supersample > 1:
+                target_size = (w * supersample, h * supersample)
             else:
-                gif = output_path.suffix.lower() == ".gif"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+                target_size = (w, h)
+            try:
+                self._plotter.window_size = target_size
+            except Exception:
+                target_size = None  # fallback silencieux
 
-            # Gestion résolution / supersampling
-            original_size = getattr(self._plotter, "window_size", None)
-            target_size = None
+        if anti_aliasing:
+            with contextlib.suppress(Exception):
+                self._plotter.enable_anti_aliasing()
 
-            #If step is None, compute it to do a full 360 rotation
-            if step is None:
-                step = 360.0 / n_frames
+        if gif and imageio is None:
+            gif = False  # fallback (mais nécessitera quand même imageio pour vidéo)
 
-            if window_size:
-                w, h = window_size
-                w = int(w)
-                h = int(h)
-                if supersample > 1:
-                    target_size = (w * supersample, h * supersample)
-                else:
-                    target_size = (w, h)
-                try:
-                    self._plotter.window_size = target_size
-                except Exception:
-                    target_size = None  # fallback silencieux
-
-            if anti_aliasing:
+        if gif:
+            frames = []
+            for i in range(n_frames):
+                elev_step = elevation if (elevation and i < n_frames / 2) else (-elevation if elevation else 0.0)
+                self._apply_rotation(azimuth_deg=step, elevation_deg=elev_step)
+                frames.append(self._plotter.screenshot(return_img=True))
+            imageio.mimsave(output_path, frames, fps=fps, loop=100) # loop=0 pour boucle infinie
+            # Restauration taille
+            if original_size is not None and target_size is not None:
                 with contextlib.suppress(Exception):
-                    self._plotter.enable_anti_aliasing()
+                    self._plotter.window_size = original_size
+            return str(output_path)
 
-            if gif and imageio is None:
-                gif = False  # fallback (mais nécessitera quand même imageio pour vidéo)
+        # --- Branche vidéo ---
+        if imageio is None:
+            raise RuntimeError("imageio indisponible. Installez: pip install imageio imageio-ffmpeg ou ffmpeg système.")
 
-            if gif:
-                frames = []
+        # 1) Essai imageio-ffmpeg
+        has_imageio_ffmpeg = False
+        try:
+            import imageio_ffmpeg  # noqa: F401
+            has_imageio_ffmpeg = True
+        except Exception:
+            pass
+
+        if has_imageio_ffmpeg:
+            # Encodage en flux direct
+            writer = None
+            try:
+                writer_kwargs = dict(fps=fps, quality=quality, codec=codec)
+                if bitrate:
+                    writer_kwargs["bitrate"] = bitrate
+                out_params = []
+                if crf is not None and not bitrate:
+                    out_params += ["-crf", str(crf)]
+                if out_params:
+                    writer_kwargs["output_params"] = out_params
+                writer = imageio.get_writer(str(output_path), fps=fps, quality=quality)
+                # Remplacer par writer avec kwargs (compat anciennes versions)
+                with contextlib.suppress(TypeError):
+                    writer.close()
+                    writer = imageio.get_writer(str(output_path), **writer_kwargs)
                 for i in range(n_frames):
                     elev_step = elevation if (elevation and i < n_frames / 2) else (-elevation if elevation else 0.0)
                     self._apply_rotation(azimuth_deg=step, elevation_deg=elev_step)
-                    frames.append(self._plotter.screenshot(return_img=True))
-                
-                # Use ffmpeg for proper infinite loop GIF
-                try:
-                    self._write_gif_with_ffmpeg(
-                        frames, 
-                        output_path, 
-                        fps=fps,
-                        scale_width=window_size[0] if window_size else 320,
-                        optimize=True
-                    )
-                    print('GIF created using ffmpeg.')
-                except Exception as e:
-                    print('Using imageio fallback for GIF creation.')
-                    warnings.warn(f"ffmpeg GIF creation failed: {e}. Falling back to imageio.")
-                    # Fallback to imageio (though loop parameter may not work)
-                    imageio.mimsave(str(output_path), frames, format='GIF', duration=1000/fps, loop=0)
-                
-                if original_size is not None and target_size is not None:
+                    frame = self._plotter.screenshot(return_img=True)
+                    writer.append_data(frame)
+            finally:
+                if writer is not None:
                     with contextlib.suppress(Exception):
-                        self._plotter.window_size = original_size
-                return str(output_path)
-
-            print("Not GIF, proceeding with video encoding.")
-            # --- Branche vidéo ---
-            if imageio is None:
-                raise RuntimeError("imageio indisponible. Installez: pip install imageio imageio-ffmpeg ou ffmpeg système.")
-
-            # 1) Essai imageio-ffmpeg
-            has_imageio_ffmpeg = False
-            try:
-                import imageio_ffmpeg  # noqa: F401
-                has_imageio_ffmpeg = True
-            except Exception:
-                pass
-
-            if has_imageio_ffmpeg:
-                # Encodage en flux direct
-                writer = None
-                try:
-                    writer_kwargs = dict(fps=fps, quality=quality, codec=codec)
-                    if bitrate:
-                        writer_kwargs["bitrate"] = bitrate
-                    out_params = []
-                    if crf is not None and not bitrate:
-                        out_params += ["-crf", str(crf)]
-                    if out_params:
-                        writer_kwargs["output_params"] = out_params
-                    writer = imageio.get_writer(str(output_path), fps=fps, quality=quality)
-                    # Remplacer par writer avec kwargs (compat anciennes versions)
-                    with contextlib.suppress(TypeError):
                         writer.close()
-                        writer = imageio.get_writer(str(output_path), **writer_kwargs)
-                    for i in range(n_frames):
-                        elev_step = elevation if (elevation and i < n_frames / 2) else (-elevation if elevation else 0.0)
-                        self._apply_rotation(azimuth_deg=step, elevation_deg=elev_step)
-                        frame = self._plotter.screenshot(return_img=True)
-                        writer.append_data(frame)
-                finally:
-                    if writer is not None:
-                        with contextlib.suppress(Exception):
-                            writer.close()
-                    self._plotter.close()
-                    # Permettre reconstruction ultérieure (ex: vis.show())
-                    self._plotter = None
-                if original_size is not None and target_size is not None:
-                    with contextlib.suppress(Exception):
-                        self._plotter.window_size = original_size
-                return str(output_path)
+                self._plotter.close()
+                # Permettre reconstruction ultérieure (ex: vis.show())
+                self._plotter = None
+            if original_size is not None and target_size is not None:
+                with contextlib.suppress(Exception):
+                    self._plotter.window_size = original_size
+            return str(output_path)
 
-            # 2) Fallback binaire ffmpeg (frames temporaires PNG)
-            ffmpeg_bin = shutil.which("ffmpeg")
-            if ffmpeg_bin:
-                temp_dir = Path(tempfile.mkdtemp(prefix="vtkvis_frames_"))
-                try:
-                    for i in range(n_frames):
-                        elev_step = elevation if (elevation and i < n_frames / 2) else (-elevation if elevation else 0.0)
-                        self._apply_rotation(azimuth_deg=step, elevation_deg=elev_step)
-                        frame = self._plotter.screenshot(return_img=True)
-                        imageio.imwrite(temp_dir / f"frame{i:05d}.png", frame)
-                    # Essais multi-codecs
-                    if auto_codec_fallback:
-                        candidates = self._codec_candidates(ffmpeg_bin, codec, prefer_software=prefer_software)
-                    else:
-                        candidates = [codec]
-                    last_err = None
-                    for idx, cdc in enumerate(candidates):
-                        cmd = [
-                            ffmpeg_bin,
-                            "-y",
-                            "-framerate", str(fps),
-                            "-i", str(temp_dir / "frame%05d.png"),
-                        ]
-                        if cdc:
-                            if idx == 0 and cdc != codec:
-                                warnings.warn(f"Codec '{codec}' indisponible -> fallback '{cdc}'.")
-                            elif idx > 0:
-                                warnings.warn(f"Tentative codec fallback '{cdc}'.")
-                            cmd += ["-c:v", cdc]
-                        if crf is not None and not bitrate and (cdc.startswith("libx264") or cdc.startswith("libx265") or cdc in ("libvpx_vp9", "")):
-                            cmd += ["-crf", str(crf)]
-                        if bitrate:
-                            cmd += ["-b:v", bitrate]
-                        if cdc.startswith("libx264") or cdc.startswith("libx265"):
-                            cmd += ["-preset", "slow"]
-                        cmd += ["-pix_fmt", "yuv420p", str(output_path)]
-                        proc = subprocess.run(cmd, capture_output=True, text=True)
-                        if proc.returncode == 0:
-                            last_err = None
-                            break
-                        last_err = f"Codec '{cdc or 'auto'}' échec:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
-                finally:
-                    self._plotter.close()
-                    self._plotter = None
-                    with contextlib.suppress(Exception):
-                        shutil.rmtree(temp_dir)
-                if original_size is not None and target_size is not None:
-                    with contextlib.suppress(Exception):
-                        self._plotter.window_size = original_size
-                return str(output_path)
+        # 2) Fallback binaire ffmpeg (frames temporaires PNG)
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if ffmpeg_bin:
+            temp_dir = Path(tempfile.mkdtemp(prefix="vtkvis_frames_"))
+            try:
+                for i in range(n_frames):
+                    elev_step = elevation if (elevation and i < n_frames / 2) else (-elevation if elevation else 0.0)
+                    self._apply_rotation(azimuth_deg=step, elevation_deg=elev_step)
+                    frame = self._plotter.screenshot(return_img=True)
+                    imageio.imwrite(temp_dir / f"frame{i:05d}.png", frame)
+                # Essais multi-codecs
+                if auto_codec_fallback:
+                    candidates = self._codec_candidates(ffmpeg_bin, codec, prefer_software=prefer_software)
+                else:
+                    candidates = [codec]
+                last_err = None
+                for idx, cdc in enumerate(candidates):
+                    cmd = [
+                        ffmpeg_bin,
+                        "-y",
+                        "-framerate", str(fps),
+                        "-i", str(temp_dir / "frame%05d.png"),
+                    ]
+                    if cdc:
+                        if idx == 0 and cdc != codec:
+                            warnings.warn(f"Codec '{codec}' indisponible -> fallback '{cdc}'.")
+                        elif idx > 0:
+                            warnings.warn(f"Tentative codec fallback '{cdc}'.")
+                        cmd += ["-c:v", cdc]
+                    if crf is not None and not bitrate and (cdc.startswith("libx264") or cdc.startswith("libx265") or cdc in ("libvpx_vp9", "")):
+                        cmd += ["-crf", str(crf)]
+                    if bitrate:
+                        cmd += ["-b:v", bitrate]
+                    if cdc.startswith("libx264") or cdc.startswith("libx265"):
+                        cmd += ["-preset", "slow"]
+                    cmd += ["-pix_fmt", "yuv420p", str(output_path)]
+                    proc = subprocess.run(cmd, capture_output=True, text=True)
+                    if proc.returncode == 0:
+                        last_err = None
+                        break
+                    last_err = f"Codec '{cdc or 'auto'}' échec:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                if last_err:
+                    raise RuntimeError("ffmpeg a échoué après tous les fallbacks:\n" + last_err)
+            finally:
+                self._plotter.close()
+                self._plotter = None
+                with contextlib.suppress(Exception):
+                    shutil.rmtree(temp_dir)
+            if original_size is not None and target_size is not None:
+                with contextlib.suppress(Exception):
+                    self._plotter.window_size = original_size
+            return str(output_path)
 
-            # 3) Erreur explicite
-            raise RuntimeError(
-                "Aucun backend vidéo fonctionnel.\n"
-                "- Installez imageio-ffmpeg: pip install imageio-ffmpeg\n"
-                "ou\n"
-                "- Installez ffmpeg (ex: apt-get install ffmpeg)\n"
-                "Sinon utilisez gif=True pour générer un GIF."
-            )
-        
-        finally:
-            # Restaurer l'état original des meshes
-            if backup is not None:
-                self._restore_mesh_state(backup)
-                self._plotter = None  # Forcer reconstruction
+        # 3) Erreur explicite
+        raise RuntimeError(
+            "Aucun backend vidéo fonctionnel.\n"
+            "- Installez imageio-ffmpeg: pip install imageio-ffmpeg\n"
+            "ou\n"
+            "- Installez ffmpeg (ex: apt-get install ffmpeg)\n"
+            "Sinon utilisez gif=True pour générer un GIF."
+        )
 
     # ------------------------------
     # Utilitaires

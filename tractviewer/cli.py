@@ -53,7 +53,7 @@ def main(argv=None):
     for raw in args.inputs:
         path_str, meta = _parse_input_spec(raw)
         meta.setdefault("name", Path(path_str).stem)
-        vis.add_dataset(path_str, meta)
+        vis.add(path_str, meta)
 
     if args.screenshot:
         vis.capture_screenshot(args.screenshot)

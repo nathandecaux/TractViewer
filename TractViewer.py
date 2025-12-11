@@ -207,7 +207,7 @@ class TractViewer:
         surf.field_data["nifti_iso_value"] = np.array([iso_value], dtype=np.float32)
         return surf
 
-    def add_dataset(self, data: DataInput, params: Optional[ParamDict] = None):
+    def add(self, data: DataInput, params: Optional[ParamDict] = None):
         ds = self._load(data)
         params = dict(params or {})
         if "name" not in params:
@@ -279,7 +279,7 @@ class TractViewer:
         vis = cls(**kwargs)
         params_list = params_list or [{}] * len(paths)
         for p, prm in zip(paths, params_list):
-            vis.add_dataset(p, prm)
+            vis.add(p, prm)
         return vis
 
     # ------------------------------
@@ -775,7 +775,7 @@ if __name__ == "__main__":
 
     os.environ["TRACTVIEWER_NIFTI_COORD"] = "LPS"
     vis = TractViewer(background="black", off_screen=False)
-    vis.add_dataset(
+    vis.add(
         "/home/ndecaux/NAS_EMPENN/share/projects/actidep/bids/derivatives/hcp_association_24pts/sub-01001/tracto/sub-01001_bundle-AFleft_desc-associations_model-MCM_space-HCP_tracto.vtk",
         {
             "display_array": "point_index",
@@ -785,7 +785,7 @@ if __name__ == "__main__":
             "show_scalar_bar": True,  # mappé vers show_scalar_bar
             "name": "associations",
         }
-    ).add_dataset(
+    ).add(
         "/home/ndecaux/NAS_EMPENN/share/projects/actidep/bids/derivatives/hcp_association_24pts/sub-01001/tracto/sub-01001_bundle-AFleft_desc-centroids_model-MCM_space-subject_tracto.vtk",
         {
             "display_array": None,
@@ -796,7 +796,7 @@ if __name__ == "__main__":
             "style": "points",
             "points_as_spheres": True,
         }
-    ).add_dataset(
+    ).add(
         "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/average_anat.nii.gz",
         {
             "display_array": "intensity",
@@ -811,7 +811,7 @@ if __name__ == "__main__":
             "style": "surface",
         }
     #Cli version : display_array=intensity,cmap=gray,opacity=0.3,show_scalar_bar=0,name=anatomy,ambient=0.6,specular=0.1,diffuse=0.8,style=surface
-    ).add_dataset(
+    ).add(
         "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/summed_AF_left.tck",
         {
             "display_array": "length_mm",

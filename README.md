@@ -86,19 +86,19 @@ tractviewer bundle.vtk --rotate 120 --rotation-output rot.gif --step 3 --gif
 ```python
 from tractviewer import TractViewer
 vis = TractViewer(off_screen=True)
-vis.add_dataset("bundle.vtk", {"name": "bundle"})
+vis.add("bundle.vtk", {"name": "bundle"})
 vis.capture_screenshot("cap.png")
 
 # Exemple avec paramètres d'affichage
-vis.add_dataset("bundle.vtk", {"scalar": "FA", "cmap": "magma", "opacity": 0.5})
+vis.add("bundle.vtk", {"scalar": "FA", "cmap": "magma", "opacity": 0.5})
 vis.record_rotation("rotation.mp4", n_frames=180, step=2)
 
 # Points / sphères
-vis.add_dataset(
+vis.add(
 	"points.vtk",
 	{"points": True, "point_size": 8, "color": "yellow"}
 )
-vis.add_dataset(
+vis.add(
 	"points.vtk",
 	{"point_radius": 0.5, "color": "red", "opacity": 0.6}
 )
@@ -119,7 +119,7 @@ os.environ["TRACTVIEWER_NIFTI_COORD"] = "LPS"
 vis = TractViewer(background="black", off_screen=True)
 
 # 1. Chargement d'une anatomie (surface iso) + réglages matériaux
-vis.add_dataset(
+vis.add(
     "anat.nii.gz",
     {
         "display_array": "intensity",
@@ -136,7 +136,7 @@ vis.add_dataset(
 )
 
 # 2. Tractographie (vtk / tck / trk) avec colormap sur longueur + threshold
-vis.add_dataset(
+vis.add(
     "bundle_AF_left.tck",
     {
         "display_array": "length_mm",
@@ -151,7 +151,7 @@ vis.add_dataset(
 )
 
 # 3. Centroides en points rendus comme sphères
-vis.add_dataset(
+vis.add(
     "centroids.vtk",
     {
         "style": "points",
@@ -164,7 +164,7 @@ vis.add_dataset(
 )
 
 # 4. Même fichier tract mais rendu en points (glyph implicites) sans scalaires
-vis.add_dataset(
+vis.add(
     "bundle_AF_left.tck",
     {
         "style": "points",
@@ -217,13 +217,13 @@ vis2.capture_screenshot("out/quick.png")
 
 # 10. Interaction (si DISPLAY dispo)
 if os.environ.get("DISPLAY"):
-    TractViewer(background="white").add_dataset(
+    TractViewer(background="white").add(
         "bundle_AF_left.tck",
         {"display_array": "length_mm", "cmap": "magma", "show_scalar_bar": True}
     ).show()
 ```
 
-### Paramètres principaux (API add_dataset)
+### Paramètres principaux (API add)
 
 | Clé | Description |
 |-----|-------------|

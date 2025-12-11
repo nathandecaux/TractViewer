@@ -16,7 +16,7 @@ from tractviewer.enveloppe import enveloppe_minimale  # ajout
 import sys
 import traceback
 import faulthandler  # ajout
-
+import gc
 
 try:
     import imageio.v2 as imageio  # GIF option
@@ -170,7 +170,7 @@ class TractViewer:
         frames: List[np.ndarray],
         output_path: Union[str, Path],
         fps: int = 10,
-        scale_width: int = 320,
+        scale_width = None,
         optimize: bool = True
     ) -> str:
         """
@@ -193,6 +193,9 @@ class TractViewer:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
+        if scale_width is None:
+            scale_width = frames[0].shape[1]
+
         # Create temporary directory for frames
         temp_dir = Path(tempfile.mkdtemp(prefix="tractviewer_gif_"))
         
@@ -421,7 +424,7 @@ class TractViewer:
         
         return grid
 
-    def add_dataset(self, data: DataInput, params: Optional[ParamDict] = None, **kwargs):
+    def add(self, data: DataInput, params: Optional[ParamDict] = None, **kwargs):
         ds = self._load(data)
         params = dict(params or {})
         params.update(kwargs)  # Merge params with additional kwargs
@@ -442,6 +445,42 @@ class TractViewer:
         # Invalidation plotter si déjà construit
         self._plotter = None
         return self
+
+    def rm (self, name: str):
+        """Supprime un dataset par son nom."""
+        initial_count = len(self._datasets)
+        
+        removed_datasets = [ds for ds, prm in self._datasets if prm.get("name") == name]
+        if not removed_datasets:
+            return self
+        
+        # Filtrer la liste pour retirer les datasets correspondants
+        self._datasets = [(ds, prm) for ds, prm in self._datasets if prm.get("name") != name]
+
+        # Invalider le plotter si des datasets ont été supprimés
+        if len(self._datasets) < initial_count:
+            self._close_plotter()
+        
+        for ds in removed_datasets:
+            self._release_dataset_resources(ds)
+        
+        gc.collect()
+        return self
+
+    @staticmethod
+    def _release_dataset_resources(ds: pv.DataSet):
+        """Libère explicitement les gros buffers PyVista/VTK associés à un dataset."""
+        with contextlib.suppress(Exception):
+            ds.clear_data()
+        with contextlib.suppress(Exception):
+            if hasattr(ds, "points"):
+                ds.points = np.empty((0, 3), dtype=np.float32)
+        for attr in ("lines", "faces", "polys", "strips"):
+            with contextlib.suppress(Exception):
+                if hasattr(ds, attr):
+                    setattr(ds, attr, np.empty((0,), dtype=np.int32))
+        with contextlib.suppress(Exception):
+            ds.deep_clean()
 
     def _maybe_project_tract(self, ds: pv.DataSet):
         """Projette les points d'une tractographie via l'affine de référence si disponible.
@@ -494,12 +533,22 @@ class TractViewer:
         vis = cls(**kwargs)
         params_list = params_list or [{}] * len(paths)
         for p, prm in zip(paths, params_list):
-            vis.add_dataset(p, prm)
+            vis.add(p, prm)
         return vis
 
     # ------------------------------
     # Construction de la scène
     # ------------------------------
+    def _close_plotter(self):
+        """Ferme explicitement le plotter PyVista pour éviter les fuites mémoire."""
+        if self._plotter is None:
+            return
+        with contextlib.suppress(Exception):
+            self._plotter.clear()
+        with contextlib.suppress(Exception):
+            self._plotter.close()
+        self._plotter = None
+
     def _ensure_plotter(self):
         # Reconstruit si plotter absent ou déjà fermé
         if self._plotter is not None and not getattr(self._plotter, "_closed", False):
@@ -1014,7 +1063,6 @@ class TractViewer:
                         frames, 
                         output_path, 
                         fps=fps,
-                        scale_width=window_size[0] if window_size else 320,
                         optimize=True
                     )
                     print('GIF created using ffmpeg.')
@@ -1027,6 +1075,7 @@ class TractViewer:
                 if original_size is not None and target_size is not None:
                     with contextlib.suppress(Exception):
                         self._plotter.window_size = original_size
+                self._close_plotter()
                 return str(output_path)
 
             print("Not GIF, proceeding with video encoding.")
@@ -1068,9 +1117,7 @@ class TractViewer:
                     if writer is not None:
                         with contextlib.suppress(Exception):
                             writer.close()
-                    self._plotter.close()
-                    # Permettre reconstruction ultérieure (ex: vis.show())
-                    self._plotter = None
+                    self._close_plotter()
                 if original_size is not None and target_size is not None:
                     with contextlib.suppress(Exception):
                         self._plotter.window_size = original_size
@@ -1118,8 +1165,7 @@ class TractViewer:
                             break
                         last_err = f"Codec '{cdc or 'auto'}' échec:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
                 finally:
-                    self._plotter.close()
-                    self._plotter = None
+                    self._close_plotter()
                     with contextlib.suppress(Exception):
                         shutil.rmtree(temp_dir)
                 if original_size is not None and target_size is not None:
@@ -1140,7 +1186,7 @@ class TractViewer:
             # Restaurer l'état original des meshes
             if backup is not None:
                 self._restore_mesh_state(backup)
-                self._plotter = None  # Forcer reconstruction
+            self._close_plotter()
 
     # ------------------------------
     # Utilitaires

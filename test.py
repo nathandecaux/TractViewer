@@ -43,7 +43,7 @@ if __name__ == "__main__":
     if not Path(cent_path).exists():
         print("Fichier introuvable:", cent_path)
 
-    vis.add_dataset(
+    vis.add(
         assoc_path,
         {
             "display_array": "point_index",
@@ -53,7 +53,7 @@ if __name__ == "__main__":
             "scalar_bar": True,
             "name": "associations",
         }
-    ).add_dataset(
+    ).add(
         cent_path,
         {
             "display_array": None,
@@ -64,7 +64,7 @@ if __name__ == "__main__":
             "style": "points",
             "points_as_spheres": True,
         }
-    ).add_dataset(
+    ).add(
         "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/average_anat.nii.gz",
         {
             "display_array": "intensity",
@@ -78,7 +78,7 @@ if __name__ == "__main__":
             "diffuse": 0.8,
             "style": "surface",
         }
-    ).add_dataset(
+    ).add(
         "/home/ndecaux/NAS_EMPENN/share/projects/HCP105_Zenodo_NewTrkFormat/inGroupe1Space/Atlas/summed_AF_left.trk",
         {
             "display_array": "length_mm",

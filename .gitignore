@@ -5,3 +5,4 @@ exemple.sh
 tractviewer/__pycache__/core.cpython-312.pyc
 *.pyc
 test.py
+tractviewer/core copy.py

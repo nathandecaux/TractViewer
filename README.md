@@ -2,6 +2,8 @@
 
 Petit utilitaire pour visualiser (ou capturer hors écran) des tractographies / surfaces.
 
+![https://github.com/nathandecaux/TractViewer/blob/main/streamlines_with_associations_rotation.gif](https://github.com/nathandecaux/TractViewer/blob/main/streamlines_with_associations_rotation.gif)
+
 ## Installation
 
 ```bash

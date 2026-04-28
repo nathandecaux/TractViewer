@@ -11,7 +11,7 @@ import subprocess
 import shutil
 import tempfile
 from PIL import Image
-from tractviewer.enveloppe import enveloppe_minimale  # ajout
+from tractviewer.enveloppe import enveloppe_minimale, enveloppe_tractogram  # ajout
 # Ajout: imports debug
 import sys
 import traceback
@@ -39,6 +39,10 @@ class TractViewer:
       - clim: Tuple[float,float]   limites (min, max) pour l'affichage
       - threshold: (str, (min,max))  filtrage sur un array => applique un threshold
       - opacity: float | str | Sequence[float]
+            - contour: bool | str  active le contour; si True => noir, si str => couleur
+    - contour_width: float  épaisseur additionnelle du contour pour lignes (défaut 2.0)
+            - categorical_legend: bool | None  force la légende catégorielle (None => auto)
+            - categorical_max_values: int  seuil auto pour légende catégorielle (défaut 10)
       - show_edges: bool
       - scalar_bar: bool
       - point_size / line_width: tailles optionnelles
@@ -89,12 +93,12 @@ class TractViewer:
     # Chargement / ajout de datasets
     # ------------------------------
     @staticmethod
-    def _load(obj: DataInput) -> pv.DataSet:
+    def _load(obj: DataInput, marching_cubes: bool = True, smooth_iterations: int = 0) -> pv.DataSet:
         """Charge un objet selon son extension.
 
         Extensions supportées supplémentaires:
           - .tck / .trk : tractographie -> vtkPolyData (lignes)
-          - .nii / .nii.gz : NIfTI -> projection surface (isosurface)
+          - .nii / .nii.gz : NIfTI -> projection surface (isosurface) ou volume brut
           - .png : image PNG -> ImageData avec couleurs RGB comme scalaires
         """
         if isinstance(obj, pv.DataSet):
@@ -107,10 +111,10 @@ class TractViewer:
         if suffix in (".tck", ".trk"):
             return TractViewer._load_tract_file(path)
         if suffix in (".nii",) or double_suffix == ".nii.gz":
-            return TractViewer._load_nifti_surface(path)
+            return TractViewer._load_nifti_surface(path, marching_cubes=marching_cubes, smooth_iterations=smooth_iterations)
         if suffix == ".png":
             return TractViewer._load_png_as_vtk(path)
-        return pv.read(path)
+        return pv.read(path,progress_bar=True)  # fallback générique pour les formats supportés par pyvista/VTK
 
     # --- Chargement spécialisé tractographie ---
     @staticmethod
@@ -263,18 +267,18 @@ class TractViewer:
 
     # --- Chargement / projection NIfTI ---
     @staticmethod
-    def _load_nifti_surface(path: Path) -> pv.PolyData:
-        """Charge un NIfTI et renvoie une surface isosurface (marching cubes).
+    def _load_nifti_surface(path: Path, marching_cubes: bool = True, smooth_iterations: int = 0) -> pv.DataSet:
+        """Charge un NIfTI et renvoie une surface isosurface (marching cubes) ou le volume brut.
 
         Mécanisme:
           - Charge volume via nibabel
           - Si 4D, prend la première composante
-          - Calcule un iso_value:
-              * variable d'environnement TRACTVIEWER_NIFTI_ISO si définie
-              * sinon moyenne (min+max)/2 après exclusion des NaNs
-          - Crée un pv.ImageData puis applique contour
-          - Applique l'affine voxel->monde (RAS+)
-          - Conversion optionnelle vers LPS si variable TRACTVIEWER_NIFTI_COORD=LPS
+          - Si marching_cubes=True (défaut):
+              * Calcule un iso_value (env TRACTVIEWER_NIFTI_ISO ou (min+max)/2)
+              * Crée un pv.ImageData puis applique contour
+              * Applique l'affine voxel->monde (RAS+)
+              * Conversion optionnelle vers LPS si variable TRACTVIEWER_NIFTI_COORD=LPS
+          - Si marching_cubes=False: retourne le pv.ImageData en espace voxel (sans isosurface)
         """
         try:
             import nibabel as nib
@@ -301,6 +305,13 @@ class TractViewer:
             iso_value = float(iso_env) if iso_env is not None else float((data.min() + data.max()) / 2.0)
         except ValueError:
             iso_value = float((data.min() + data.max()) / 2.0)
+        # Mode volume brut: retourner l'ImageData sans isosurface
+        if not marching_cubes:
+            grid.field_data["nifti_affine"] = affine.astype(np.float32).ravel()
+            grid.field_data["nifti_dims"] = np.array(dims, dtype=np.int32)
+            print(f"Volume NIfTI chargé (sans marching cubes) depuis {path.name}")
+            return grid
+
         if data.max() - data.min() <= 1e-6:
             warnings.warn("Volume NIfTI quasi constant: surface impossible.")
             empty = grid.extract_points(grid.points)
@@ -316,6 +327,10 @@ class TractViewer:
         except Exception as e:
             warnings.warn(f"Echec contour: {e}; fallback extract_surface (coarse).")
             surf = grid.extract_surface()
+        # Smoothing optionnel (Laplacien)
+        if smooth_iterations > 0:
+            surf = surf.smooth(n_iter=smooth_iterations)
+            print(f"Smoothing appliqué ({smooth_iterations} itérations) sur {path.name}")
         # Appliquer affine complet sur les points (rotation + translation + anisotropies)
         pts = surf.points
         pts_h = np.c_[pts, np.ones(len(pts))]
@@ -425,9 +440,11 @@ class TractViewer:
         return grid
 
     def add(self, data: DataInput, params: Optional[ParamDict] = None, **kwargs):
-        ds = self._load(data)
         params = dict(params or {})
-        params.update(kwargs)  # Merge params with additional kwargs
+        params.update(kwargs)
+        marching_cubes = params.pop("marching_cubes", True)
+        smooth_iterations = int(params.pop("smooth", 200))
+        ds = self._load(data, marching_cubes=marching_cubes, smooth_iterations=smooth_iterations)
         if "name" not in params:
             params["name"] = f"ds{len(self._datasets)}"
         # Enregistrer affine de référence si NIfTI
@@ -444,6 +461,36 @@ class TractViewer:
         self._maybe_project_tract(ds)
         # Invalidation plotter si déjà construit
         self._plotter = None
+        return self
+
+    def edit(self, name: str, params: Optional[ParamDict] = None, **kwargs):
+        """Met à jour les paramètres d'un dataset existant identifié par son nom.
+
+        Le dictionnaire fourni est fusionné avec les paramètres existants
+        (même comportement que add: params + kwargs, kwargs prioritaire).
+        """
+        updates = dict(params or {})
+        updates.update(kwargs)
+        if not updates:
+            return self
+
+        updated = False
+        new_datasets: List[Tuple[pv.DataSet, ParamDict]] = []
+        for ds, prm in self._datasets:
+            if prm.get("name") == name:
+                prm_updated = dict(prm)
+                prm_updated.update(updates)
+                new_datasets.append((ds, prm_updated))
+                updated = True
+            else:
+                new_datasets.append((ds, prm))
+
+        if not updated:
+            raise ValueError(f"Dataset nommé '{name}' introuvable.")
+
+        self._datasets = new_datasets
+        # Fermer explicitement la fenêtre courante pour éviter des acteurs obsolètes.
+        self._close_plotter()
         return self
 
     def rm (self, name: str):
@@ -576,6 +623,12 @@ class TractViewer:
 
     # Ajout: factorisation de l'ajout de meshes
     def _populate_plotter(self):
+        # Nettoyer les scalar bars existantes (peuvent persister après clear/rebuild selon backend)
+        with contextlib.suppress(Exception):
+            existing_scalar_bars = list(getattr(self._plotter, "scalar_bars", {}).keys())
+            for sb_title in existing_scalar_bars:
+                with contextlib.suppress(Exception):
+                    self._plotter.remove_scalar_bar(title=sb_title)
         self._scalar_bar_added = False
         for idx, (ds, prm) in enumerate(self._datasets):
             try:
@@ -599,10 +652,39 @@ class TractViewer:
                     with contextlib.suppress(Exception):
                         mesh.set_active_scalars(display_array)
 
+                # Cast de l'array si type=int ou type=float est spécifié
+                cast_type = prm.get("type")
+                if display_array and cast_type in ("int", "float"):
+                    dtype = np.int32 if cast_type == "int" else np.float32
+                    for store in (mesh.point_data, mesh.cell_data):
+                        if display_array in store.keys():
+                            store[display_array] = store[display_array].astype(dtype)
+                            break
+
                 style = prm.get("style")
                 if style == "enveloppe":
                     try:
-                        mesh = enveloppe_minimale(mesh)
+                        is_tract = isinstance(mesh, pv.PolyData) and getattr(mesh, "n_lines", 0) > 0
+                        if is_tract:
+                            voxel_size = float(prm.get("enveloppe_voxel_size", 1.0))
+                            smooth_env = int(prm.get("enveloppe_smooth", 50))
+                            mesh = enveloppe_tractogram(
+                                mesh,
+                                display_array=display_array,
+                                voxel_size=voxel_size,
+                                smooth_iterations=smooth_env,
+                            )
+                            # Après transformation, vérifier que display_array est accessible
+                            if display_array:
+                                _has_in_point = display_array in mesh.point_data.keys()
+                                _has_in_cell = display_array in mesh.cell_data.keys()
+                                if _has_in_point or _has_in_cell:
+                                    with contextlib.suppress(Exception):
+                                        mesh.set_active_scalars(display_array)
+                                else:
+                                    display_array = None  # array absent du mesh résultant
+                        else:
+                            mesh = enveloppe_minimale(mesh)
                         prm_style_forced = "surface"
                     except Exception as e:
                         self._warn_debug(f"Echec enveloppe (dataset {idx}, name={prm.get('name')}).", exc=sys.exc_info())
@@ -639,10 +721,73 @@ class TractViewer:
                         style=prm_style_forced,
                     )
 
+                contour = prm.get("contour", None)
+                is_line_dataset = (
+                    isinstance(mesh, pv.PolyData)
+                    and getattr(mesh, "n_lines", 0) > 0
+                    and getattr(mesh, "n_cells", 0) == getattr(mesh, "n_lines", 0)
+                )
+                if contour is not None and is_line_dataset:
+                    # Pour les lignes, show_edges n'a pas d'effet: on dessine une sous-couche plus épaisse.
+                    contour_color = "black" if contour is True else (contour if isinstance(contour, str) else "black")
+                    base_line_width = float(prm.get("line_width", 2.0))
+                    contour_extra = float(prm.get("contour_width", 2.0))
+                    contour_line_width = max(1.0, base_line_width + contour_extra)
+                    outline_kwargs = dict(
+                        scalars=None,
+                        color=contour_color,
+                        opacity=prm.get("opacity", 1.0),
+                        show_scalar_bar=False,
+                        line_width=contour_line_width,
+                        render_lines_as_tubes=True,
+                        name=f"{prm.get('name')}_contour" if prm.get("name") else None,
+                    )
+                    self._plotter.add_mesh(mesh, **{k: v for k, v in outline_kwargs.items() if v is not None})
+                    add_kwargs["line_width"] = max(1.0, base_line_width)
+                    add_kwargs["render_lines_as_tubes"] = True
+                    add_kwargs.pop("show_edges", None)
+                    add_kwargs.pop("edge_color", None)
+                elif contour is not None:
+                    add_kwargs["show_edges"] = True
+                    if contour is True:
+                        add_kwargs["edge_color"] = "black"
+                    elif isinstance(contour, str):
+                        add_kwargs["edge_color"] = contour
+                elif "edge_color" in prm:
+                    add_kwargs["edge_color"] = prm["edge_color"]
+
                 if add_kwargs.get("style") == "points" and "point_size" not in prm:
                     add_kwargs["point_size"] = 5
                 if "points_as_spheres" in prm:
                     add_kwargs["points_as_spheres"] = prm["points_as_spheres"]
+
+                # Légende catégorielle (auto si peu de valeurs uniques, configurable par params)
+                if display_array:
+                    categorical_setting = prm.get("categorical_legend", None)
+                    categorical_max_values = int(prm.get("categorical_max_values", 10))
+                    scalar_values = None
+                    if display_array in mesh.point_data.keys():
+                        scalar_values = np.asarray(mesh.point_data[display_array]).ravel()
+                    elif display_array in mesh.cell_data.keys():
+                        scalar_values = np.asarray(mesh.cell_data[display_array]).ravel()
+
+                    use_categorical = False
+                    unique_vals = np.array([])
+                    if scalar_values is not None and scalar_values.size > 0:
+                        if np.issubdtype(scalar_values.dtype, np.number):
+                            scalar_values = scalar_values[np.isfinite(scalar_values)]
+                        if scalar_values.size > 0:
+                            unique_vals = np.unique(scalar_values)
+
+                    if isinstance(categorical_setting, bool):
+                        use_categorical = categorical_setting
+                    elif unique_vals.size > 0 and unique_vals.size < categorical_max_values:
+                        use_categorical = True
+
+                    if use_categorical and unique_vals.size > 0:
+                        add_kwargs["categories"] = True
+                        add_kwargs["annotations"] = {v: str(v) for v in unique_vals.tolist()}
+
                 if add_kwargs.get("show_scalar_bar"):
                     sb_args = prm.get("scalar_bar_args") or {}
                     sb_defaults = {
@@ -808,16 +953,19 @@ class TractViewer:
             ])
             points = points @ rot_z.T
         
+        if isinstance(dataset, pv.ImageData):
+            return  # ImageData: points implicites, rotation non applicable
         dataset.points = points
 
     def _backup_mesh_state(self) -> List[np.ndarray]:
         """Sauvegarde l'état actuel des points de tous les datasets."""
-        return [ds.points.copy() for ds, _ in self._datasets]
+        return [ds.points.copy() if not isinstance(ds, pv.ImageData) else None for ds, _ in self._datasets]
 
     def _restore_mesh_state(self, backup: List[np.ndarray]):
         """Restaure l'état des points depuis une sauvegarde."""
         for (ds, _), points in zip(self._datasets, backup):
-            ds.points = points
+            if points is not None:
+                ds.points = points
 
     def _apply_rotation(self, azimuth_deg: float, elevation_deg: float):
         """Rotation + rendu (indispensable off_screen pour que la caméra se propage aux captures)."""
@@ -862,7 +1010,7 @@ class TractViewer:
     def capture_screenshot(self, 
                          output_path: Union[str, Path], 
                          transparent: bool = False,
-                         rotation_x: float = 0.0,
+                         rotation_x: float = -90.0,
                          rotation_y: float = 0.0, 
                          rotation_z: float = 0.0):
         """
@@ -994,7 +1142,7 @@ class TractViewer:
         auto_codec_fallback: bool = True,
         prefer_software: bool = True,
         off_screen: Optional[bool] = True,
-        rotation_x: float = 0.0,
+        rotation_x: float = -90.0,
         rotation_y: float = 0.0,
         rotation_z: float = 0.0,
     ):
@@ -1272,3 +1420,33 @@ class TractViewer:
 
         # Fallback par défaut
         return "black"
+
+    def _warn_debug(self, msg: str, exc=None, extra=None):
+        """Affiche un message de debug avec traceback si exc fournie."""
+        if not self._debug:
+            return
+        full_msg = f"[TractViewer DEBUG] {msg}"
+        if extra:
+            full_msg += f" | {extra}"
+        print(full_msg, file=sys.stderr)
+        if exc:
+            etype, evalue, etb = exc
+            traceback.print_exception(etype, evalue, etb, file=sys.stderr)
+
+    def _debug_env_info(self) -> str:
+        """Retourne une chaîne avec des infos d'environnement utiles pour le debug."""
+        info = []
+        info.append(f"Python {sys.version.split()[0]}")
+        try:
+            import pyvista
+            info.append(f"pyvista {pyvista.__version__}")
+        except Exception:
+            info.append("pyvista non installé")
+        if self._vtk_backend_class:
+            info.append(f"VTK backend: {self._vtk_backend_class}")
+        info.append(f"off_screen={self.off_screen}")
+        if os.environ.get("DISPLAY"):
+            info.append(f"DISPLAY={os.environ.get('DISPLAY')}")
+        else:
+            info.append("Pas de DISPLAY")
+        return " | ".join(info)

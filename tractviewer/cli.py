@@ -14,6 +14,7 @@ def build_parser():
             "Fichiers à charger. Paramètres par fichier avec syntaxe étendue:\n"
             "chemin:clé=val,clé=val,...\n"
             "Types auto: int, float, bool (true/false), None.\n"
+            "Cast de display_array: type=int ou type=float.\n"
             "Listes / tuples: utiliser parenthèses. Ex:\n"
             "  volume.nii.gz:display_array=intensity,cmap=gray,clim=(200,800),opacity=0.3,show_scalar_bar=false,ambient=0.6,specular=0.1,diffuse=0.8,style=surface\n"
             "Threshold: threshold=(array,min,max)  -> threshold=(FA,0.2,0.8)\n"
@@ -30,6 +31,12 @@ def build_parser():
     p.add_argument("--gif", action="store_true", help="Forcer GIF pour la rotation")
     p.add_argument("--step", type=float, default=2.0, help="Pas azimut (deg) entre frames de rotation")
     p.add_argument("--window-size", type=str, help="Taille fenêtre WxH (ex: 1280x720)")
+    p.add_argument("--rotation-x", type=float, default=-90.0, help="Rotation du mesh autour de l'axe X en degrés (défaut: -90)")
+    p.add_argument("--rotation-y", type=float, default=0.0, help="Rotation du mesh autour de l'axe Y en degrés (défaut: 0)")
+    p.add_argument("--rotation-z", type=float, default=0.0, help="Rotation du mesh autour de l'axe Z en degrés (défaut: 0)")
+    p.add_argument("--no-marching-cubes", action="store_true", help="Désactive le marching cubes pour les NIfTI (charge le volume brut)")
+    p.add_argument("--smooth", type=int, default=0, help="Nombre d'itérations de smoothing Laplacien après marching cubes (0=désactivé)")
+    p.add_argument("--color", type=str, default=None, help="Couleur des surfaces NIfTI (ex: white, #ff8800, red)")
     return p
 
 def main(argv=None):
@@ -53,14 +60,33 @@ def main(argv=None):
     for raw in args.inputs:
         path_str, meta = _parse_input_spec(raw)
         meta.setdefault("name", Path(path_str).stem)
+        if args.no_marching_cubes and "marching_cubes" not in meta:
+            meta["marching_cubes"] = False
+        if args.smooth and "smooth" not in meta:
+            meta["smooth"] = args.smooth
+        if args.color and "color" not in meta:
+            meta["color"] = args.color
         vis.add(path_str, meta)
 
     if args.screenshot:
-        vis.capture_screenshot(args.screenshot)
+        vis.capture_screenshot(
+            args.screenshot,
+            rotation_x=args.rotation_x,
+            rotation_y=args.rotation_y,
+            rotation_z=args.rotation_z
+        )
 
     if args.rotate and args.rotate > 0:
         output = args.rotation_output or Path("rotation.mp4")
-        vis.record_rotation(output_path=output, n_frames=args.rotate, step=args.step, gif=args.gif)
+        vis.record_rotation(
+            output_path=output,
+            n_frames=args.rotate,
+            step=args.step,
+            gif=args.gif,
+            rotation_x=args.rotation_x,
+            rotation_y=args.rotation_y,
+            rotation_z=args.rotation_z
+        )
 
     if args.interactive or (not off_screen and not (args.screenshot or args.rotate)):
         vis.show()
@@ -179,6 +205,11 @@ def _parse_input_spec(spec: str):
 
     def coerce_value(key: str, raw: str):
         raw = raw.strip()
+        # type=<int|float> : directive de cast pour display_array
+        if key == "type":
+            if raw in ("int", "float"):
+                return raw
+            raise ValueError(f"Valeur non supportée pour 'type': {raw!r}. Utilisez 'int' ou 'float'.")
         if raw.startswith("(") and raw.endswith(")"):
             inner = raw[1:-1].strip()
             if not inner:

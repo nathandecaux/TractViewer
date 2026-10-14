@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385;
+    --border: #e1e4ea; --accent: #2f6fed; --accent-soft: #e8efff; --input: #ffffff;
+    --danger: #c93a3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1a1e26; --text: #e6e9ef; --muted: #8b93a5;
+      --border: #2b313d; --accent: #6e9bff; --accent-soft: #24304a; --input: #12151b;
+      --danger: #ff7b7b;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #panel {
+    width: 310px; flex: none; overflow-y: auto; background: var(--panel);
+    border-right: 1px solid var(--border); padding: 14px 16px 24px;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; font-weight: 600; }
+  .muted { color: var(--muted); font-size: 12px; }
+  section + section { border-top: 1px solid var(--border); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  #items li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  #items li:hover { background: var(--bg); }
+  #items li.selected { background: var(--accent-soft); }
+  #items li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  .remove { border: none; background: none; color: var(--muted); padding: 0 4px; font-size: 15px; line-height: 1; }
+  .remove:hover { color: var(--danger); }
+  label { display: block; margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+  label > select, label > input[type=number], label > input[type=range] { display: block; width: 100%; margin-top: 4px; }
+  select, input[type=number], button {
+    font: inherit; color: var(--text); background: var(--input);
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+  }
+  input[type=range] { accent-color: var(--accent); }
+  input[type=color] { width: 44px; height: 26px; padding: 0 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--input); vertical-align: middle; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .6; cursor: progress; }
+  .row { display: flex; gap: 8px; align-items: flex-end; }
+  .row > * { flex: 1; min-width: 0; }
+  .inline { display: flex; align-items: center; justify-content: space-between; }
+  output { float: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  #views { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  #views button { padding: 5px 2px; font-size: 12px; }
+  .actions { margin-top: 8px; }
+  .slice-axis { margin-top: 10px; }
+  .slice-axis .inline { margin: 0; color: var(--text); font-size: 12px; }
+  .slice-axis input[type=range] { display: block; width: 100%; margin-top: 4px; }
+  .slice-axis input[type=checkbox] { margin: 0 6px 0 0; vertical-align: middle; }
+  #dropzone {
+    display: block; border: 1px dashed var(--border); border-radius: 8px; padding: 12px; margin: 0;
+    text-align: center; color: var(--muted); cursor: pointer;
+  }
+  #dropzone:hover { border-color: var(--accent); color: var(--text); }
+  #status, #gif-status { min-height: 1.4em; margin-top: 6px; }
+  .error { color: var(--danger) !important; }
+  main { position: relative; flex: 1; min-width: 0; }
+  #view { position: absolute; inset: 0; }
+  main.dragging::after {
+    content: "Drop to add"; position: absolute; inset: 12px; display: flex;
+    align-items: center; justify-content: center; font-size: 16px; color: var(--accent);
+    border: 2px dashed var(--accent); border-radius: 12px; background: color-mix(in srgb, var(--panel) 70%, transparent);
+    pointer-events: none;
+  }
+  #legend {
+    position: absolute; right: 16px; bottom: 16px; padding: 8px 10px; width: 260px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; opacity: .95;
+  }
+  #legend canvas { display: block; width: 100%; height: 12px; border-radius: 3px; margin: 6px 0 2px; }
+  #legend .ticks { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  h3 { font-size: 12px; margin: 16px 0 0; font-weight: 600; }
+  #loading {
+    position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; color: var(--text);
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+  #loading .spinner {
+    width: 36px; height: 36px; border-radius: 50%;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  #loading-text { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #message {
+    position: absolute; left: 50%; top: 40%; transform: translateX(-50%); max-width: 420px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px;
+  }
+  @media (max-width: 700px) {
+    body { flex-direction: column; }
+    #panel { width: 100%; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<aside id="panel">
+  <header><h1>__TITLE__</h1><span class="muted">vtk.js</span></header>
+  <p id="summary" class="muted"></p>
+
+  <section id="upload-section" hidden>
+    <h2>Add</h2>
+    <label id="dropzone">Choose or drop files<br><span class="muted">.vtk .vtp .trk .tck .nii(.gz) …</span>
+      <input type="file" id="file-input" multiple hidden>
+    </label>
+    <p class="muted">NIfTI files are loaded as slices; select the volume to generate its isosurface.</p>
+    <p id="status" class="muted"></p>
+  </section>
+
+  <section>
+    <h2>Objects</h2>
+    <ul id="items"></ul>
+    <p id="empty" class="muted">No objects.</p>
+  </section>
+
+  <section id="item-controls" hidden>
+    <h2 id="item-title"></h2>
+    <p id="item-info" class="muted"></p>
+    <label data-kind="mesh">Array <select id="array"></select></label>
+    <div id="scalar-controls">
+      <label>Colormap <select id="cmap"></select></label>
+      <div class="row">
+        <label>Min <input type="number" id="range-min" step="any"></label>
+        <label>Max <input type="number" id="range-max" step="any"></label>
+      </div>
+      <div class="actions"><button id="range-auto" type="button">Auto range</button></div>
+    </div>
+    <label id="color-row" class="inline" data-kind="mesh">Color <input type="color" id="color"></label>
+    <label data-kind="mesh">Representation
+      <select id="representation">
+        <option value="surface">surface</option>
+        <option value="wireframe">wireframe</option>
+        <option value="points">points</option>
+      </select>
+    </label>
+    <label>Opacity <output id="opacity-out"></output><input type="range" id="opacity" min="0" max="1" step="0.01"></label>
+    <label data-kind="mesh">Line width <output id="line-width-out"></output><input type="range" id="line-width" min="1" max="10" step="0.5"></label>
+    <label data-kind="mesh">Point size <output id="point-size-out"></output><input type="range" id="point-size" min="1" max="20" step="1"></label>
+    <div data-kind="volume">
+      <h3>Isosurface (marching cubes)</h3>
+      <label>Iso value <input type="number" id="iso-value" step="any"></label>
+      <label>Smoothing iterations <output id="iso-smooth-out"></output><input type="range" id="iso-smooth" min="0" max="200" step="5"></label>
+      <div class="actions"><button id="iso-generate" type="button">Generate isosurface</button></div>
+      <p id="iso-status" class="muted"></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Slices</h2>
+    <label>Reference <select id="slice-ref"></select></label>
+    <p id="slice-hint" class="muted"></p>
+    <div id="slice-axes"></div>
+    <label>Clip objects
+      <select id="clip-mode">
+        <option value="none">none</option>
+        <option value="slab">slab around the planes</option>
+        <option value="below">keep the − side</option>
+        <option value="above">keep the + side</option>
+      </select>
+    </label>
+    <label id="thickness-row">Slab thickness (mm) <output id="thickness-out"></output><input type="range" id="thickness" min="0.5" max="40" step="0.5"></label>
+  </section>
+
+  <section>
+    <h2>View</h2>
+    <div id="views"></div>
+    <div class="row actions">
+      <button id="reset" type="button">Reset camera</button>
+      <button id="shot" type="button">PNG capture</button>
+    </div>
+    <label class="inline">Background <input type="color" id="background"></label>
+  </section>
+
+  <section>
+    <h2>Rotation GIF</h2>
+    <div class="row">
+      <label>Frames <input type="number" id="gif-frames" value="72" min="2" max="720" step="1"></label>
+      <label>FPS <input type="number" id="gif-fps" value="20" min="1" max="50" step="1"></label>
+      <label>Width (px) <input type="number" id="gif-width" value="640" min="64" max="4096" step="16"></label>
+    </div>
+    <p class="muted">Full turn around the current vertical axis of the view.</p>
+    <div class="actions"><button id="gif-record" type="button">Record GIF</button></div>
+    <p id="gif-status" class="muted"></p>
+  </section>
+</aside>
+
+<main>
+  <div id="view"></div>
+  <div id="loading"><div class="spinner"></div><span id="loading-text">Loading scene…</span></div>
+  <div id="legend" hidden>
+    <div id="legend-title"></div>
+    <canvas id="legend-bar" width="256" height="1"></canvas>
+    <div class="ticks muted"><span id="legend-min"></span><span id="legend-max"></span></div>
+  </div>
+</main>
+
+<script src="__VTKJS_URL__"></script>
+<script id="scene" type="application/json">__SCENE_JSON__</script>
+<script>
+(function () {
+  'use strict';
+
+  const SCENE = JSON.parse(document.getElementById('scene').textContent);
+  const GIFENC_URL = '__GIFENC_URL__';
+  const $ = (id) => document.getElementById(id);
+
+  if (typeof vtk === 'undefined') {
+    const msg = document.createElement('div');
+    msg.id = 'message';
+    msg.textContent = 'vtk.js could not be loaded (no access to __VTKJS_URL__?).';
+    document.querySelector('main').appendChild(msg);
+    $('loading').hidden = true;
+    return;
+  }
+
+  const { vtkGenericRenderWindow } = vtk.Rendering.Misc;
+  const { vtkActor, vtkMapper, vtkColorTransferFunction, vtkImageMapper, vtkImageSlice } = vtk.Rendering.Core;
+  const { vtkPolyData, vtkImageData, vtkPlane } = vtk.Common.DataModel;
+  const { vtkDataArray } = vtk.Common.Core;
+  const { vtkPlaneSource } = vtk.Filters.Sources;
+  const { vtkImageMarchingCubes, vtkWindowedSincPolyDataFilter } = vtk.Filters.General;
+  const { vtkPolyDataNormals } = vtk.Filters.Core;
+
+  // ---------- Utilities ----------
+  function decode(b64, Type) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Type(bytes.buffer);
+  }
+  function hexToRgb(hex) {
+    const v = parseInt(hex.slice(1), 16);
+    return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+  }
+  function fmt(x) {
+    if (!isFinite(x)) return String(x);
+    const a = Math.abs(x);
+    return (a !== 0 && (a < 1e-3 || a >= 1e5)) ? x.toExponential(2) : String(+x.toPrecision(4));
+  }
+  function el(tag, props, children) {
+    const node = Object.assign(document.createElement(tag), props || {});
+    (children || []).forEach((c) => node.appendChild(c));
+    return node;
+  }
+  function download(href, filename) {
+    el('a', { href, download: filename }).click();
+  }
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+  // Loading overlay. nextFrame() lets the browser paint it before synchronous heavy work.
+  function showLoading(text) {
+    $('loading-text').textContent = text;
+    $('loading').hidden = false;
+  }
+  function hideLoading() {
+    $('loading').hidden = true;
+  }
+  const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+  const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+  const colormap = (name) => SCENE.colormaps[name] || SCENE.colormaps.viridis;
+  function fillLut(lut, cmapName, lo, hi) {
+    if (hi <= lo) hi = lo + 1e-6;
+    lut.removeAllPoints();
+    for (const [x, r, g, b] of colormap(cmapName)) lut.addRGBPoint(lo + x * (hi - lo), r, g, b);
+  }
+
+  // ---------- Rendering ----------
+  const grw = vtkGenericRenderWindow.newInstance({
+    background: hexToRgb(SCENE.background), listenWindowResize: true,
+  });
+  grw.setContainer($('view'));
+  grw.resize();
+  const renderer = grw.getRenderer();
+  const renderWindow = grw.getRenderWindow();
+  const render = () => renderWindow.render();
+
+  const REPRESENTATION = { points: 0, wireframe: 1, surface: 2 };
+  const CELL_KINDS = { verts: 'getVerts', lines: 'getLines', polys: 'getPolys', strips: 'getStrips' };
+  const AXES = [
+    { label: 'Sagittal', letter: 'x', color: '#e05252' },
+    { label: 'Coronal', letter: 'y', color: '#3fae5a' },
+    { label: 'Axial', letter: 'z', color: '#4a7be0' },
+  ];
+
+  // Displayed objects. A NIfTI dataset can have both a mesh (isosurface) AND a volume, same id.
+  const meshes = new Map();
+  const volumes = new Map();
+  const items = [];          // display order: { kind: 'mesh' | 'volume', id }
+  let selected = null;       // element of `items`
+
+  // ---------- Meshes ----------
+  function buildMesh(spec, previous) {
+    const { polydata, arrays } = polydataFromSpec(spec);
+    return createMesh(spec, polydata, arrays, previous);
+  }
+
+  function polydataFromSpec(spec) {
+    const polydata = vtkPolyData.newInstance();
+    polydata.getPoints().setData(decode(spec.points, Float32Array), 3);
+    for (const [key, getter] of Object.entries(CELL_KINDS)) {
+      if (spec[key]) polydata[getter]().setData(decode(spec[key], Uint32Array));
+    }
+    const arrays = {};
+    for (const a of spec.arrays) {
+      const da = vtkDataArray.newInstance({ name: a.name, values: decode(a.data, Float32Array), numberOfComponents: a.components });
+      (a.location === 'point' ? polydata.getPointData() : polydata.getCellData()).addArray(da);
+      arrays[`${a.location}:${a.name}`] = { name: a.name, location: a.location, components: a.components, range: a.range };
+    }
+    return { polydata, arrays };
+  }
+
+  // `spec` holds the display settings (same fields as a serialized layer, without the data).
+  function createMesh(spec, polydata, arrays, previous) {
+    const lut = vtkColorTransferFunction.newInstance();
+    const mapper = vtkMapper.newInstance({ interpolateScalarsBeforeMapping: true, useLookupTableScalarRange: true });
+    mapper.setInputData(polydata);
+    mapper.setLookupTable(lut);
+    const actor = vtkActor.newInstance();
+    actor.setMapper(mapper);
+    const prop = actor.getProperty();
+    // Lines/points without normals: flat shading (like pyvista), otherwise dark patches.
+    prop.setLighting(polydata.getPolys().getNumberOfValues() > 0 || polydata.getStrips().getNumberOfValues() > 0);
+    prop.setAmbient(spec.ambient);
+    prop.setDiffuse(spec.diffuse);
+    prop.setSpecular(spec.specular);
+    renderer.addActor(actor);
+
+    const ranges = previous ? previous.ranges : {};
+    if (!previous && spec.activeArray && spec.clim) ranges[spec.activeArray] = spec.clim.slice();
+    const mesh = {
+      kind: 'mesh', id: spec.id, name: spec.name, nPoints: spec.nPoints, nCells: spec.nCells,
+      bounds: polydata.getBounds(), arrays, lut, mapper, actor, ranges,
+      state: previous ? previous.state : {
+        arrayKey: spec.activeArray, cmap: spec.cmap || 'viridis', color: spec.color,
+        opacity: spec.opacity, lineWidth: spec.lineWidth, pointSize: spec.pointSize,
+        representation: spec.representation, visible: spec.visible,
+      },
+    };
+    if (mesh.state.arrayKey && !arrays[mesh.state.arrayKey]) mesh.state.arrayKey = null;
+    applyMesh(mesh);
+    return mesh;
+  }
+
+  function meshRange(mesh) {
+    const key = mesh.state.arrayKey;
+    if (!mesh.ranges[key]) mesh.ranges[key] = mesh.arrays[key].range.slice();
+    return mesh.ranges[key];
+  }
+
+  function applyMesh(mesh) {
+    const { state, mapper, actor, lut } = mesh;
+    const prop = actor.getProperty();
+    const arr = state.arrayKey ? mesh.arrays[state.arrayKey] : null;
+    if (arr) {
+      const [lo, hi] = meshRange(mesh);
+      fillLut(lut, state.cmap, lo, hi);
+      if (arr.components > 1) lut.setVectorModeToMagnitude();
+      mapper.setScalarVisibility(true);
+      mapper.setColorByArrayName(arr.name);
+      if (arr.location === 'point') mapper.setScalarModeToUsePointFieldData();
+      else mapper.setScalarModeToUseCellFieldData();
+      mapper.setColorModeToMapScalars();
+    } else {
+      mapper.setScalarVisibility(false);
+      prop.setColor(...hexToRgb(state.color));
+    }
+    prop.setOpacity(state.opacity);
+    prop.setLineWidth(state.lineWidth);
+    prop.setPointSize(state.pointSize);
+    prop.setRepresentation(REPRESENTATION[state.representation] ?? 2);
+    actor.setVisibility(state.visible);
+  }
+
+  // ---------- Volumes (slices) ----------
+  function buildVolume(spec) {
+    const image = vtkImageData.newInstance();
+    image.setDimensions(...spec.dims);
+    image.setSpacing(...spec.spacing);
+    image.setOrigin(...spec.origin);
+    image.getPointData().setScalars(vtkDataArray.newInstance({
+      name: 'intensity', values: decode(spec.data, Float32Array), numberOfComponents: 1,
+    }));
+    const lut = vtkColorTransferFunction.newInstance();
+    const slices = AXES.map((_, axis) => {
+      const mapper = vtkImageMapper.newInstance();
+      mapper.setInputData(image);
+      mapper.setSlicingMode(axis);  // I, J, K: grid aligned with the world axes
+      const actor = vtkImageSlice.newInstance();
+      actor.setMapper(mapper);
+      const prop = actor.getProperty();
+      prop.setRGBTransferFunction(0, lut);
+      prop.setUseLookupTableScalarRange(true);
+      prop.setInterpolationTypeToLinear();
+      renderer.addActor(actor);
+      return { mapper, actor };
+    });
+    const bounds = [];
+    for (let i = 0; i < 3; i++) bounds.push(spec.origin[i], spec.origin[i] + spec.spacing[i] * (spec.dims[i] - 1));
+    const volume = {
+      kind: 'volume', id: spec.id, name: spec.name, dims: spec.dims, origin: spec.origin,
+      spacing: spec.spacing, bounds, fullRange: spec.range, window: spec.window, image, lut, slices,
+      state: {
+        cmap: 'gray', range: spec.window.slice(), opacity: 1, visible: spec.visible,
+        // Default iso value between the background and the low end of the window: outer surface.
+        isoValue: (spec.range[0] + spec.window[0]) / 2, isoSmooth: 20,
+      },
+    };
+    applyVolume(volume);
+    return volume;
+  }
+
+  function applyVolume(volume) {
+    const { state } = volume;
+    fillLut(volume.lut, state.cmap, state.range[0], state.range[1]);
+    volume.slices.forEach(({ actor }) => actor.getProperty().setOpacity(state.opacity));
+  }
+
+  // ---------- Isosurface (marching cubes, computed in the browser) ----------
+  const isoId = (volumeId) => `${volumeId}:iso`;
+  const isIsoId = (id) => id.endsWith(':iso');
+
+  async function generateIsosurface(volume) {
+    const { isoValue, isoSmooth } = volume.state;
+    const status = $('iso-status');
+    const button = $('iso-generate');
+    button.disabled = true;
+    status.className = 'muted';
+    showLoading(`Computing the isosurface of ${volume.name}…`);
+    await nextFrame();
+    try {
+      const marchingCubes = vtkImageMarchingCubes.newInstance({ contourValue: isoValue, computeNormals: false, mergePoints: true });
+      marchingCubes.setInputData(volume.image);
+      marchingCubes.update();
+      let surface = marchingCubes.getOutputData();
+      if (!surface.getNumberOfPoints()) throw new Error(`no surface at iso value ${fmt(isoValue)}`);
+      if (isoSmooth > 0) {
+        $('loading-text').textContent = `Smoothing (${isoSmooth} iterations)…`;
+        await nextFrame();
+        const smoother = vtkWindowedSincPolyDataFilter.newInstance({ numberOfIterations: isoSmooth, passBand: 0.1 });
+        smoother.setInputData(surface);
+        smoother.update();
+        surface = smoother.getOutputData();
+      }
+      const normals = vtkPolyDataNormals.newInstance();
+      normals.setInputData(surface);
+      normals.update();
+      surface = normals.getOutputData();
+
+      const id = isoId(volume.id);
+      const previous = meshes.get(id);
+      if (previous) renderer.removeActor(previous.actor);
+      const spec = {
+        id, name: `${volume.name} (isosurface)`, nPoints: surface.getNumberOfPoints(),
+        nCells: surface.getNumberOfCells(), activeArray: null, color: '#d9c7ad', opacity: 0.4,
+        lineWidth: 1, pointSize: 5, representation: 'surface', visible: true,
+        ambient: 0.1, diffuse: 0.9, specular: 0.1,
+      };
+      meshes.set(id, createMesh(spec, surface, {}, previous));
+      if (!previous) {
+        const at = items.findIndex((item) => item.kind === 'volume' && item.id === volume.id);
+        items.splice(at + 1, 0, { kind: 'mesh', id });
+      }
+      status.textContent = `Isosurface at ${fmt(isoValue)}: ${surface.getNumberOfPoints().toLocaleString('en')} points.`;
+      refreshAll();
+    } catch (err) {
+      status.className = 'error';
+      status.textContent = `Isosurface error: ${err.message}`;
+    } finally {
+      button.disabled = false;
+      hideLoading();
+    }
+  }
+
+  // ---------- Slices ----------
+  const slicing = { ref: 'scene', enabled: [false, false, false], pos: [0, 0, 0], clip: 'none', thickness: 4 };
+  const planes = AXES.map((axis) => {
+    const source = vtkPlaneSource.newInstance();
+    const mapper = vtkMapper.newInstance();
+    mapper.setInputConnection(source.getOutputPort());
+    const actor = vtkActor.newInstance();
+    actor.setMapper(mapper);
+    const prop = actor.getProperty();
+    prop.setColor(...hexToRgb(axis.color));
+    prop.setOpacity(0.18);
+    prop.setLighting(false);
+    actor.setVisibility(false);
+    renderer.addActor(actor);
+    return { source, actor };
+  });
+
+  function sceneBounds() {
+    const b = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
+    for (const obj of [...meshes.values(), ...volumes.values()]) {
+      if (!obj.state.visible) continue;
+      for (let i = 0; i < 3; i++) {
+        b[2 * i] = Math.min(b[2 * i], obj.bounds[2 * i]);
+        b[2 * i + 1] = Math.max(b[2 * i + 1], obj.bounds[2 * i + 1]);
+      }
+    }
+    return isFinite(b[0]) ? b : [-1, 1, -1, 1, -1, 1];
+  }
+
+  function refObject() {
+    const [kind, id] = slicing.ref.split(':');
+    if (kind === 'volume') return volumes.get(id) || null;
+    if (kind === 'mesh') return meshes.get(id) || null;
+    return null;
+  }
+  function refBounds() {
+    const obj = refObject();
+    return obj ? obj.bounds : sceneBounds();
+  }
+
+  function setReference(ref, recenter) {
+    slicing.ref = ref;
+    const obj = refObject();
+    if (obj && obj.kind === 'volume' && !slicing.enabled.some(Boolean)) slicing.enabled = [true, true, true];
+    if (recenter) {
+      const b = refBounds();
+      slicing.pos = [0, 1, 2].map((i) => (b[2 * i] + b[2 * i + 1]) / 2);
+    }
+    renderSlicing();
+    applySlicing();
+  }
+
+  // When a NIfTI is present it is the reference; otherwise the user picks one.
+  function ensureReference() {
+    const current = refObject();
+    const firstVolume = volumes.values().next().value;
+    if (current && current.kind === 'volume') return;
+    if (firstVolume) setReference(`volume:${firstVolume.id}`, true);
+    else if (slicing.ref !== 'scene' && !current) setReference('scene', true);
+    else renderSlicing();
+  }
+
+  function applySlicing() {
+    const ref = refObject();
+    const b = refBounds();
+    for (const volume of volumes.values()) {
+      const active = ref === volume && volume.state.visible;
+      volume.slices.forEach(({ mapper, actor }, axis) => {
+        actor.setVisibility(active && slicing.enabled[axis]);
+        if (active) {
+          const idx = Math.round((slicing.pos[axis] - volume.origin[axis]) / volume.spacing[axis]);
+          mapper.setSlice(clamp(idx, 0, volume.dims[axis] - 1));
+        }
+      });
+    }
+    const showPlanes = !ref || ref.kind !== 'volume';
+    planes.forEach(({ source, actor }, axis) => {
+      actor.setVisibility(showPlanes && slicing.enabled[axis]);
+      const p = slicing.pos[axis];
+      const o = [b[0], b[2], b[4]];
+      const p1 = o.slice(), p2 = o.slice();
+      const [u, v] = [0, 1, 2].filter((i) => i !== axis);
+      o[axis] = p1[axis] = p2[axis] = p;
+      p1[u] = b[2 * u + 1];
+      p2[v] = b[2 * v + 1];
+      source.setOrigin(...o);
+      source.setPoint1(...p1);
+      source.setPoint2(...p2);
+    });
+    for (const mesh of meshes.values()) {
+      mesh.mapper.removeAllClippingPlanes();
+      if (slicing.clip === 'none') continue;
+      slicing.enabled.forEach((on, axis) => {
+        if (!on) return;
+        const at = (offset, sign) => {
+          const origin = [0, 0, 0];
+          origin[axis] = slicing.pos[axis] + offset;
+          const normal = [0, 0, 0];
+          normal[axis] = sign;
+          mesh.mapper.addClippingPlane(vtkPlane.newInstance({ origin, normal }));
+        };
+        if (slicing.clip === 'slab') { at(-slicing.thickness / 2, 1); at(slicing.thickness / 2, -1); }
+        else if (slicing.clip === 'below') at(0, -1);
+        else at(0, 1);
+      });
+      mesh.mapper.modified();
+    }
+    render();
+  }
+
+  function renderSlicing() {
+    const select = $('slice-ref');
+    select.replaceChildren();
+    for (const v of volumes.values()) select.appendChild(el('option', { value: `volume:${v.id}`, textContent: `Volume — ${v.name}` }));
+    for (const m of meshes.values()) select.appendChild(el('option', { value: `mesh:${m.id}`, textContent: `Object — ${m.name}` }));
+    select.appendChild(el('option', { value: 'scene', textContent: 'Whole scene' }));
+    select.value = slicing.ref;
+
+    const ref = refObject();
+    $('slice-hint').textContent = volumes.size
+      ? (ref && ref.kind === 'volume' ? 'Slices of the NIfTI volume.' : 'Cutting planes without image (non-volume reference).')
+      : 'No NIfTI: choose the object that bounds the cutting planes.';
+
+    const b = refBounds();
+    const container = $('slice-axes');
+    container.replaceChildren();
+    AXES.forEach((axis, i) => {
+      const lo = b[2 * i], hi = b[2 * i + 1];
+      const step = ref && ref.kind === 'volume' ? ref.spacing[i] : Math.max((hi - lo) / 200, 1e-3);
+      slicing.pos[i] = clamp(slicing.pos[i], lo, hi);
+      const checkbox = el('input', { type: 'checkbox', checked: slicing.enabled[i] });
+      const out = el('output', { textContent: `${fmt(slicing.pos[i])} mm` });
+      const slider = el('input', { type: 'range', min: lo, max: hi, step, value: slicing.pos[i], disabled: !slicing.enabled[i] });
+      checkbox.addEventListener('change', () => {
+        slicing.enabled[i] = checkbox.checked;
+        slider.disabled = !checkbox.checked;
+        applySlicing();
+      });
+      slider.addEventListener('input', () => {
+        slicing.pos[i] = +slider.value;
+        out.textContent = `${fmt(slicing.pos[i])} mm`;
+        applySlicing();
+      });
+      const title = el('span', {}, [checkbox, document.createTextNode(`${axis.label} (${axis.letter})`)]);
+      container.appendChild(el('div', { className: 'slice-axis' }, [
+        el('div', { className: 'inline' }, [title, out]), slider,
+      ]));
+    });
+    $('clip-mode').value = slicing.clip;
+    $('thickness-row').hidden = slicing.clip !== 'slab';
+    setSlider('thickness', slicing.thickness);
+  }
+
+  // ---------- Adding / removing ----------
+  function addMeshSpec(spec) {
+    meshes.set(spec.id, buildMesh(spec));
+    items.push({ kind: 'mesh', id: spec.id });
+  }
+  function addVolumeSpec(spec) {
+    volumes.set(spec.id, buildVolume(spec));
+    items.push({ kind: 'volume', id: spec.id });
+  }
+  function replaceMeshSpec(spec) {
+    const old = meshes.get(spec.id);
+    if (!old) return;
+    renderer.removeActor(old.actor);
+    meshes.set(spec.id, buildMesh(spec, old));
+  }
+  // Removing a dataset also removes its isosurface; an isosurface alone only exists in the page.
+  function removeDataset(id) {
+    const ids = isIsoId(id) ? [id] : [id, isoId(id)];
+    for (const key of ids) {
+      const mesh = meshes.get(key);
+      if (mesh) renderer.removeActor(mesh.actor);
+      const volume = volumes.get(key);
+      if (volume) volume.slices.forEach(({ actor }) => renderer.removeActor(actor));
+      meshes.delete(key);
+      volumes.delete(key);
+      for (let i = items.length - 1; i >= 0; i--) if (items[i].id === key) items.splice(i, 1);
+      if (selected && selected.id === key) selected = null;
+    }
+    selected = selected || items[0] || null;
+    if (SCENE.server && !isIsoId(id)) fetch(`/api/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    ensureReference();
+    refreshAll();
+  }
+  const getItem = (item) => item && (item.kind === 'mesh' ? meshes : volumes).get(item.id);
+
+  // ---------- Panel ----------
+  function renderItems() {
+    const list = $('items');
+    list.replaceChildren();
+    $('empty').hidden = items.length > 0;
+    for (const item of items) {
+      const obj = getItem(item);
+      const checkbox = el('input', { type: 'checkbox', checked: obj.state.visible, title: 'Visible' });
+      checkbox.addEventListener('click', (e) => e.stopPropagation());
+      checkbox.addEventListener('change', () => {
+        obj.state.visible = checkbox.checked;
+        if (obj.kind === 'mesh') applyMesh(obj);
+        applySlicing();
+        updateLegend();
+      });
+      const remove = el('button', { type: 'button', className: 'remove', textContent: '×', title: 'Remove (mesh and volume)' });
+      remove.addEventListener('click', (e) => { e.stopPropagation(); removeDataset(item.id); });
+      const children = [checkbox, el('span', { className: 'name', textContent: obj.name, title: obj.name })];
+      if (item.kind === 'volume') children.push(el('span', { className: 'tag', textContent: 'volume' }));
+      children.push(remove);
+      const li = el('li', { className: selected === item ? 'selected' : '' }, children);
+      li.addEventListener('click', () => { selected = item; refreshAll(); });
+      list.appendChild(li);
+    }
+  }
+
+  function renderControls() {
+    const obj = getItem(selected);
+    $('item-controls').hidden = !obj;
+    if (!obj) return;
+    const s = obj.state;
+    const isMesh = obj.kind === 'mesh';
+    document.querySelectorAll('#item-controls [data-kind]').forEach((node) => { node.hidden = node.dataset.kind !== obj.kind; });
+    $('item-title').textContent = obj.name + (isMesh ? '' : ' (volume)');
+
+    if (isMesh) {
+      $('item-info').textContent = `${obj.nPoints.toLocaleString('en')} points · ${obj.nCells.toLocaleString('en')} cells`;
+      const arraySelect = $('array');
+      arraySelect.replaceChildren(el('option', { value: '', textContent: '— solid color —' }));
+      for (const [key, a] of Object.entries(obj.arrays)) {
+        const suffix = (a.location === 'cell' ? ' · cell' : '') + (a.components > 1 ? ` · ${a.components}D magnitude` : '');
+        arraySelect.appendChild(el('option', { value: key, textContent: a.name + suffix }));
+      }
+      arraySelect.value = s.arrayKey || '';
+      $('color-row').hidden = Boolean(s.arrayKey);
+      $('color').value = s.color;
+      $('representation').value = s.representation;
+      setSlider('line-width', s.lineWidth);
+      setSlider('point-size', s.pointSize);
+    } else {
+      $('item-info').textContent = `${obj.dims.join(' × ')} voxels · ${obj.spacing.map(fmt).join(' × ')} mm`;
+      $('iso-value').value = +s.isoValue.toPrecision(6);
+      setSlider('iso-smooth', s.isoSmooth);
+    }
+    const hasScalars = !isMesh || Boolean(s.arrayKey);
+    $('scalar-controls').hidden = !hasScalars;
+    $('cmap').value = s.cmap;
+    if (hasScalars) {
+      const [lo, hi] = isMesh ? meshRange(obj) : s.range;
+      $('range-min').value = +lo.toPrecision(6);
+      $('range-max').value = +hi.toPrecision(6);
+    }
+    setSlider('opacity', s.opacity);
+  }
+
+  function setSlider(id, value) {
+    $(id).value = value;
+    $(`${id}-out`).textContent = fmt(+value);
+  }
+
+  function renderCmapOptions() {
+    const select = $('cmap');
+    select.replaceChildren();
+    for (const name of Object.keys(SCENE.colormaps)) select.appendChild(el('option', { value: name, textContent: name }));
+  }
+
+  function updateLegend() {
+    const legend = $('legend');
+    const obj = getItem(selected);
+    const showing = obj && obj.state.visible && (obj.kind === 'volume' || obj.state.arrayKey);
+    legend.hidden = !showing;
+    if (!showing) return;
+    let title, lo, hi;
+    if (obj.kind === 'mesh') {
+      const arr = obj.arrays[obj.state.arrayKey];
+      [lo, hi] = meshRange(obj);
+      title = `${obj.name} — ${arr.name}${arr.components > 1 ? ' (magnitude)' : ''}`;
+    } else {
+      [lo, hi] = obj.state.range;
+      title = `${obj.name} — intensity`;
+    }
+    $('legend-title').textContent = title;
+    $('legend-min').textContent = fmt(lo);
+    $('legend-max').textContent = fmt(hi);
+    const canvas = $('legend-bar');
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    for (const [x, r, g, b] of colormap(obj.state.cmap)) grad.addColorStop(clamp(x, 0, 1), `rgb(${r * 255},${g * 255},${b * 255})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function updateSummary() {
+    const points = [...meshes.values()].reduce((n, m) => n + m.nPoints, 0);
+    $('summary').textContent = `${meshes.size} mesh(es) · ${volumes.size} volume(s) · `
+      + `${points.toLocaleString('en')} points · ${SCENE.coordSystem} frame`;
+  }
+
+  function refreshAll() {
+    renderItems();
+    renderControls();
+    updateLegend();
+    updateSummary();
+    renderSlicing();
+    applySlicing();
+  }
+
+  function updateSelected(mutator) {
+    const obj = getItem(selected);
+    if (!obj) return;
+    mutator(obj);
+    if (obj.kind === 'mesh') applyMesh(obj);
+    else applyVolume(obj);
+    renderControls();
+    updateLegend();
+    render();
+  }
+
+  // ---------- Camera ----------
+  // Anatomical directions in the data frame (LPS: +X=left, +Y=posterior).
+  const lps = SCENE.coordSystem !== 'RAS';
+  const L = [lps ? 1 : -1, 0, 0], A = [0, lps ? -1 : 1, 0], S = [0, 0, 1];
+  const neg = (v) => v.map((x) => -x);
+  const VIEWS = [
+    ['Left', L, S], ['Anterior', A, S], ['Superior', S, A],
+    ['Right', neg(L), S], ['Posterior', neg(A), S], ['Inferior', neg(S), A],
+  ];
+  function setView(dir, up) {
+    renderer.resetCamera();
+    const cam = renderer.getActiveCamera();
+    const fp = cam.getFocalPoint();
+    cam.setPosition(fp[0] + dir[0], fp[1] + dir[1], fp[2] + dir[2]);
+    cam.setViewUp(...up);
+    renderer.resetCamera();
+    render();
+  }
+
+  // ---------- Rotation GIF (encoded in the browser with gifenc) ----------
+  async function recordGif() {
+    const button = $('gif-record');
+    const status = $('gif-status');
+    const frames = clamp(Math.round(+$('gif-frames').value) || 72, 2, 720);
+    const fps = clamp(+$('gif-fps').value || 20, 1, 50);
+    const maxWidth = clamp(Math.round(+$('gif-width').value) || 640, 64, 4096);
+    button.disabled = true;
+    status.className = 'muted';
+    status.textContent = 'Loading the GIF encoder…';
+    try {
+      const { GIFEncoder, quantize, applyPalette } = await import(GIFENC_URL);
+      const gif = GIFEncoder();
+      const camera = renderer.getActiveCamera();
+      const canvas = document.createElement('canvas');
+      let ctx = null;
+      for (let i = 0; i < frames; i++) {
+        const img = await loadImage(await renderWindow.captureImages()[0]);
+        if (!ctx) {
+          const scale = Math.min(1, maxWidth / img.width);
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          ctx = canvas.getContext('2d', { willReadFrequently: true });
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const palette = quantize(data, 256);
+        gif.writeFrame(applyPalette(data, palette), canvas.width, canvas.height,
+          { palette, delay: Math.round(1000 / fps) });
+        // Rotate after the capture: after `frames` steps the camera is back where it started.
+        camera.azimuth(360 / frames);
+        renderer.resetCameraClippingRange();
+        render();
+        status.textContent = `Frame ${i + 1} / ${frames}`;
+      }
+      gif.finish();
+      const blob = new Blob([gif.bytes()], { type: 'image/gif' });
+      const url = URL.createObjectURL(blob);
+      download(url, `${document.title || 'tractviewer'}-rotation.gif`);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      status.textContent = `GIF ready: ${frames} frames, ${canvas.width}×${canvas.height}, ${(blob.size / 1e6).toFixed(1)} MB.`;
+    } catch (err) {
+      status.className = 'error';
+      status.textContent = `GIF error: ${err.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // ---------- Upload (server mode) ----------
+  async function uploadFiles(files) {
+    const status = $('status');
+    const hadContent = items.length > 0;
+    for (const [index, file] of files.entries()) {
+      const counter = files.length > 1 ? ` (${index + 1}/${files.length})` : '';
+      status.className = 'muted';
+      status.textContent = `Loading ${file.name}…`;
+      showLoading(`Loading ${file.name}${counter}…`);
+      try {
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'X-Filename': encodeURIComponent(file.name) },
+          body: file,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || response.statusText);
+        $('loading-text').textContent = `Building ${file.name}${counter}…`;
+        await nextFrame();
+        Object.assign(SCENE.colormaps, result.colormaps);
+        renderCmapOptions();
+        result.volumes.forEach(addVolumeSpec);
+        result.layers.forEach(addMeshSpec);
+        result.updated.forEach(replaceMeshSpec);
+        selected = items[items.length - 1] || selected;
+        ensureReference();
+        status.textContent = `${file.name} added.`;
+      } catch (err) {
+        status.className = 'error';
+        status.textContent = `Error: ${err.message}`;
+      }
+      refreshAll();
+    }
+    hideLoading();
+    if (!hadContent && items.length) setView(A, S);
+    else render();
+  }
+
+  if (SCENE.server) {
+    $('upload-section').hidden = false;
+    $('file-input').addEventListener('change', (e) => { uploadFiles([...e.target.files]); e.target.value = ''; });
+    const main = document.querySelector('main');
+    let depth = 0;
+    main.addEventListener('dragenter', (e) => { e.preventDefault(); depth++; main.classList.add('dragging'); });
+    main.addEventListener('dragover', (e) => e.preventDefault());
+    main.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; main.classList.remove('dragging'); } });
+    main.addEventListener('drop', (e) => {
+      e.preventDefault();
+      depth = 0;
+      main.classList.remove('dragging');
+      uploadFiles([...e.dataTransfer.files]);
+    });
+  }
+
+  // ---------- Static controls ----------
+  renderCmapOptions();
+  for (const [label, dir, up] of VIEWS) {
+    const button = el('button', { type: 'button', textContent: label });
+    button.addEventListener('click', () => setView(dir, up));
+    $('views').appendChild(button);
+  }
+
+  $('array').addEventListener('change', (e) => updateSelected((o) => { o.state.arrayKey = e.target.value || null; }));
+  $('cmap').addEventListener('change', (e) => updateSelected((o) => { o.state.cmap = e.target.value; }));
+  const currentRange = (o) => (o.kind === 'mesh' ? meshRange(o) : o.state.range);
+  $('range-min').addEventListener('change', (e) => updateSelected((o) => { currentRange(o)[0] = +e.target.value; }));
+  $('range-max').addEventListener('change', (e) => updateSelected((o) => { currentRange(o)[1] = +e.target.value; }));
+  $('range-auto').addEventListener('click', () => updateSelected((o) => {
+    if (o.kind === 'mesh') o.ranges[o.state.arrayKey] = o.arrays[o.state.arrayKey].range.slice();
+    else o.state.range = o.window.slice();
+  }));
+  $('color').addEventListener('input', (e) => updateSelected((o) => { o.state.color = e.target.value; }));
+  $('representation').addEventListener('change', (e) => updateSelected((o) => { o.state.representation = e.target.value; }));
+  $('opacity').addEventListener('input', (e) => updateSelected((o) => { o.state.opacity = +e.target.value; }));
+  $('line-width').addEventListener('input', (e) => updateSelected((o) => { o.state.lineWidth = +e.target.value; }));
+  $('point-size').addEventListener('input', (e) => updateSelected((o) => { o.state.pointSize = +e.target.value; }));
+
+  $('iso-value').addEventListener('change', (e) => updateSelected((o) => { o.state.isoValue = +e.target.value; }));
+  $('iso-smooth').addEventListener('input', (e) => updateSelected((o) => { o.state.isoSmooth = +e.target.value; }));
+  $('iso-generate').addEventListener('click', () => {
+    const obj = getItem(selected);
+    if (obj && obj.kind === 'volume') generateIsosurface(obj);
+  });
+
+  $('slice-ref').addEventListener('change', (e) => setReference(e.target.value, true));
+  $('clip-mode').addEventListener('change', (e) => {
+    slicing.clip = e.target.value;
+    $('thickness-row').hidden = slicing.clip !== 'slab';
+    applySlicing();
+  });
+  $('thickness').addEventListener('input', (e) => {
+    slicing.thickness = +e.target.value;
+    $('thickness-out').textContent = fmt(slicing.thickness);
+    applySlicing();
+  });
+
+  $('background').value = SCENE.background;
+  $('background').addEventListener('input', (e) => { renderer.setBackground(...hexToRgb(e.target.value)); render(); });
+  $('reset').addEventListener('click', () => { renderer.resetCamera(); render(); });
+  $('shot').addEventListener('click', () => {
+    renderWindow.captureImages()[0].then((url) => download(url, `${document.title || 'tractviewer'}.png`));
+  });
+  $('gif-record').addEventListener('click', recordGif);
+
+  // ---------- Initial scene ----------
+  (async () => {
+    await nextFrame();  // paint the loading overlay before decoding the data
+    SCENE.volumes.forEach(addVolumeSpec);
+    SCENE.layers.forEach(addMeshSpec);
+    selected = items.find((i) => i.kind === 'mesh') || items[0] || null;
+    ensureReference();
+    refreshAll();
+    setView(A, S);  // same orientation as the default screenshot()/record()
+    hideLoading();
+  })();
+})();
+</script>
+</body>
+</html>

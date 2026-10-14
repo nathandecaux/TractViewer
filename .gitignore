@@ -6,3 +6,8 @@ tractviewer/__pycache__/core.cpython-312.pyc
 *.pyc
 test.py
 tractviewer/core copy.py
+*sync-conflict*
+*.vtk
+*.gif
+
+__pycache__/TractViewer.cpython-312.pyc

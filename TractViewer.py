@@ -20,27 +20,34 @@ except Exception:  # pragma: no cover
 DataInput = Union[str, Path, pv.DataSet]
 ParamDict = Dict[str, object]
 
+warnings.warn(
+    "Deprecated: the root module 'TractViewer.py' (old standalone version). "
+    "Use 'from tractviewer import TractViewer' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 
 class TractViewer:
     """
-    Visualisation simplifiée de fichiers/datasets VTK via pyvista.
+    Simplified visualization of VTK files/datasets with pyvista.
 
-    Paramètres par dataset (clé -> signification):
-      - display_array: str | None  nom de l'array scalaires à afficher
+    Per-dataset parameters (key -> meaning):
+        - display_array: str | None  name of the scalar array to display
       - cmap: str | Sequence[str]  colormap matplotlib
-      - clim: Tuple[float,float]   limites (min, max) pour l'affichage
-      - threshold: (str, (min,max))  filtrage sur un array => applique un threshold
+        - clim: Tuple[float,float]   (min, max) display range
+        - threshold: (str, (min,max))  filter on an array => applies a threshold
       - opacity: float | str | Sequence[float]
       - show_edges: bool
       - show_scalar_bar: bool
       - point_size / line_width: tailles optionnelles
-      - ambient / specular / diffuse: réglages matériaux
-      - style: 'surface' | 'wireframe' | 'points'   (nouveau; défaut surface)
-      - points_as_spheres: bool (utile si style='points')
+        - ambient / specular / diffuse: material settings
+        - style: 'surface' | 'wireframe' | 'points'   (new; default surface)
+        - points_as_spheres: bool (useful with style='points')
       - name: nom interne (sinon auto)
-    Paramètres globaux (constructeur):
-      - background: couleur du fond (default "white")
-      - off_screen: bool (pour rendu sans interface, ex: serveur)
+    Global parameters (constructor):
+        - background: background color (default "white")
+        - off_screen: bool (render without a window, e.g. on a server)
     """
     def __init__(self, background: str = "white", off_screen: bool = False):
         print('COUCOUCOUCOCUCOU')
@@ -50,21 +57,21 @@ class TractViewer:
         self._plotter: Optional[pv.Plotter] = None
         self._show_scalar_bar_added = False
         self._font_color = self._choose_font_color(self.background)
-        self._reference_affine: Optional[np.ndarray] = None  # 4x4 issue du premier NIfTI
-        # Auto bascule headless si pas de DISPLAY
+        self._reference_affine: Optional[np.ndarray] = None  # 4x4 from the first NIfTI
+        # Automatically switch to headless without a DISPLAY
         if not self.off_screen and not os.environ.get("DISPLAY"):
-            warnings.warn("Aucun DISPLAY détecté -> passage en mode off_screen.")
+            warnings.warn("No DISPLAY detected -> switching to off_screen mode.")
             self.off_screen = True
 
     # ------------------------------
-    # Chargement / ajout de datasets
+    # Loading / adding datasets
     # ------------------------------
     @staticmethod
     def _load(obj: DataInput) -> pv.DataSet:
-        """Charge un objet selon son extension.
+        """Load an object according to its extension.
 
-        Extensions supportées supplémentaires:
-          - .tck / .trk : tractographie -> vtkPolyData (lignes)
+        Additional supported extensions:
+          - .tck / .trk : tractography -> vtkPolyData (lines)
           - .nii / .nii.gz : NIfTI -> projection surface (isosurface)
         """
         if isinstance(obj, pv.DataSet):
@@ -73,32 +80,32 @@ class TractViewer:
         if not path.exists():
             raise FileNotFoundError(path)
         suffix = path.suffix.lower()
-        double_suffix = ''.join(path.suffixes[-2:]).lower()  # pour .nii.gz
+        double_suffix = ''.join(path.suffixes[-2:]).lower()  # for .nii.gz
         if suffix in (".tck", ".trk"):
             return TractViewer._load_tract_file(path)
         if suffix in (".nii",) or double_suffix == ".nii.gz":
             return TractViewer._load_nifti_surface(path)
         return pv.read(path)
 
-    # --- Chargement spécialisé tractographie ---
+    # --- Tractography loading ---
     @staticmethod
     def _load_tract_file(path: Path) -> pv.PolyData:
-        """Lit un fichier tractographie (.tck ou .trk) et retourne un PolyData.
+        """Read a tractography file (.tck or .trk) and return a PolyData.
 
-        Utilise nibabel si disponible. Chaque streamline devient une polyline.
-        Ajoute des arrays:
+        Uses nibabel when available. Each streamline becomes a polyline.
+        Adds arrays:
           - 'streamline_id' (cell data)
-          - 'point_index' (point data index local dans streamline)
-          - 'length_mm' (cell data longueur de la streamline en mm)
+            - 'point_index' (point data, local index along the streamline)
+            - 'length_mm' (cell data, streamline length in mm)
         """
         try:
             import nibabel as nib
         except Exception as e:  # pragma: no cover
-            raise ImportError("nibabel requis pour charger des fichiers tractographie (.tck/.trk). 'pip install nibabel'") from e
+            raise ImportError("nibabel is required to load tractography files (.tck/.trk): 'pip install nibabel'") from e
 
         tractogram = nib.streamlines.load(str(path))
         streamlines = tractogram.streamlines
-        # Construction des points / connectivité
+        # Build points / connectivity
         all_points: List[np.ndarray] = []
         lines_idx: List[int] = []
         cell_data_lengths: List[float] = []
@@ -117,11 +124,11 @@ class TractViewer:
             dists = np.linalg.norm(np.diff(sl, axis=0), axis=1)
             cell_data_lengths.append(float(dists.sum()))
             cell_stream_ids.append(sid)
-            # Point data (index local)
+            # Point data (local index)
             point_stream_index.extend(list(range(npts)))
             running_index += npts
         if not all_points:
-            raise ValueError(f"Aucune streamline valide dans {path}.")
+            raise ValueError(f"No valid streamline in {path}.")
         points = np.vstack(all_points)
         poly = pv.PolyData()
         poly.points = points
@@ -133,50 +140,50 @@ class TractViewer:
         poly.point_data["point_index"] = np.array(point_stream_index, dtype=np.int32)
         return poly
 
-    # --- Chargement / projection NIfTI ---
+    # --- NIfTI loading / projection ---
     @staticmethod
     def _load_nifti_surface(path: Path) -> pv.PolyData:
-        """Charge un NIfTI et renvoie une surface isosurface (marching cubes).
+        """Load a NIfTI and return an isosurface (marching cubes).
 
-        Mécanisme:
+        Mechanism:
           - Charge volume via nibabel
-          - Si 4D, prend la première composante
-          - Calcule un iso_value:
-              * variable d'environnement TRACTVIEWER_NIFTI_ISO si définie
-              * sinon moyenne (min+max)/2 après exclusion des NaNs
-          - Crée un pv.ImageData puis applique contour
-          - Applique l'affine voxel->monde (RAS+)
-          - Conversion optionnelle vers LPS si variable TRACTVIEWER_NIFTI_COORD=LPS
+            - If 4D, take the first component
+            - Compute an iso_value:
+                    * TRACTVIEWER_NIFTI_ISO environment variable if set
+                    * otherwise the mean (min+max)/2 after excluding NaNs
+            - Build a pv.ImageData then apply contour
+          - Applies the voxel->world affine (RAS+)
+            - Optional conversion to LPS if TRACTVIEWER_NIFTI_COORD=LPS
         """
         try:
             import nibabel as nib
         except Exception as e:  # pragma: no cover
-            raise ImportError("nibabel requis pour charger des fichiers NIfTI (.nii/.nii.gz). 'pip install nibabel'") from e
+            raise ImportError("nibabel is required to load NIfTI files (.nii/.nii.gz): 'pip install nibabel'") from e
         img = nib.load(str(path))
         data = img.get_fdata(dtype=np.float32)
         if data.ndim == 4:
             data = data[..., 0]
         if np.isnan(data).any():
             data = np.nan_to_num(data, nan=0.0)
-        affine = img.affine  # voxel -> monde
+        affine = img.affine  # voxel -> world
         dims = data.shape  # (nx, ny, nz)
-        # Construire une ImageData en espace voxel (origine 0,0,0; spacing 1,1,1)
+        # Build an ImageData in voxel space (origin 0,0,0; spacing 1,1,1)
         grid = pv.ImageData()
         grid.origin = (0.0, 0.0, 0.0)
         grid.spacing = (1.0, 1.0, 1.0)
         grid.dimensions = tuple([d if d > 1 else 1 for d in dims])
-        # Ravel C (car ImageData en coordonnées voxel directes) -> correspond (x,y,z)
+        # C ravel (ImageData directly in voxel coordinates) -> matches (x,y,z)
         grid.point_data["intensity"] = data.ravel(order="F")
-        # Détermination iso
+        # Iso value
         iso_env = os.environ.get("TRACTVIEWER_NIFTI_ISO")
         try:
             iso_value = float(iso_env) if iso_env is not None else float((data.min() + data.max()) / 2.0)
         except ValueError:
             iso_value = float((data.min() + data.max()) / 2.0)
         if data.max() - data.min() <= 1e-6:
-            warnings.warn("Volume NIfTI quasi constant: surface impossible.")
+            warnings.warn("Nearly constant NIfTI volume: no surface can be extracted.")
             empty = grid.extract_points(grid.points)
-            # Transformer points vers monde quand même
+            # Transform points to world anyway
             pts = empty.points
             pts_h = np.c_[pts, np.ones(len(pts))]
             empty.points = (pts_h @ affine.T)[:, :3]
@@ -185,16 +192,16 @@ class TractViewer:
         try:
             surf = grid.contour([iso_value], scalars="intensity")
         except Exception as e:
-            warnings.warn(f"Echec contour: {e}; fallback extract_surface (coarse).")
+            warnings.warn(f"Contour failed: {e}; falling back to extract_surface (coarse).")
             surf = grid.extract_surface()
-        # Appliquer affine complet sur les points (rotation + translation + anisotropies)
+        # Apply the full affine to the points (rotation + translation + anisotropy)
         pts = surf.points
         pts_h = np.c_[pts, np.ones(len(pts))]
         surf.points = (pts_h @ affine.T)[:, :3]
-        # Stocker affine aplatie pour usage ultérieur (projection d'autres datasets)
+        # Store the flattened affine for later use (projection of other datasets)
         surf.field_data["nifti_affine"] = affine.astype(np.float32).ravel()
         surf.field_data["nifti_dims"] = np.array(dims, dtype=np.int32)
-        # Conversion optionnelle RAS->LPS ou LPS->RAS (ici on suppose affine donne RAS+)
+        # Optional RAS->LPS or LPS->RAS conversion (the affine is assumed to give RAS+)
         target_coord = os.environ.get("TRACTVIEWER_NIFTI_COORD", "RAS").upper()
         if target_coord not in ("RAS", "LPS"):
             target_coord = "RAS"
@@ -212,32 +219,32 @@ class TractViewer:
         params = dict(params or {})
         if "name" not in params:
             params["name"] = f"ds{len(self._datasets)}"
-        # Enregistrer affine de référence si NIfTI
+        # Remember the reference affine if NIfTI
         if self._reference_affine is None and "nifti_affine" in ds.field_data:
             flat = np.array(ds.field_data["nifti_affine"]).astype(float)
             if flat.size == 16:
                 self._reference_affine = flat.reshape(4, 4)
-                # Appliquer immédiatement à toute tractographie déjà chargée non transformée
+                # Apply it right away to any already loaded, untransformed tractogram
                 for existing_ds, _ in self._datasets:
                     self._maybe_project_tract(existing_ds)
-        # Ajouter dataset
+        # Add the dataset
         self._datasets.append((ds, params))
-        # Si l'affine existe déjà, projeter ce tract le cas échéant
+        # If the affine already exists, project this tract when relevant
         self._maybe_project_tract(ds)
-        # Invalidation plotter si déjà construit
+        # Invalidate the plotter if already built
         self._plotter = None
         return self
 
     def _maybe_project_tract(self, ds: pv.DataSet):
-        """Projette les points d'une tractographie via l'affine de référence si disponible.
+        """Project the points of a tractogram through the reference affine when available.
 
-        Critères heuristiques pour considérer un dataset comme tract:
-          - présence de cell_data['streamline_id'] ET lines non vides.
-        On évite double-application via un flag field_data['tract_transformed'].
+        Heuristic criteria for treating a dataset as a tract:
+            - cell_data['streamline_id'] present AND non-empty lines.
+        A field_data['tract_transformed'] flag prevents applying it twice.
         """
         if self._reference_affine is None:
             return
-        if not isinstance(ds, pv.PolyData):  # sécurité
+        if not isinstance(ds, pv.PolyData):  # safety
             return
         if "streamline_id" not in ds.cell_data:
             return
@@ -245,7 +252,7 @@ class TractViewer:
             return
         try:
             pts = ds.points
-            # Heuristique: détecter si les points ressemblent à des indices voxel (entiers dans bornes du volume)
+            # Heuristic: detect whether the points look like voxel indices (integers within the volume bounds)
             dims = None
             for ref_ds, _ in self._datasets:
                 if "nifti_dims" in ref_ds.field_data:
@@ -263,16 +270,16 @@ class TractViewer:
             if is_voxel:
                 pts_h = np.c_[pts, np.ones(len(pts))]
                 ds.points = (pts_h @ self._reference_affine.T)[:, :3]
-            # Flip optionnel pour LPS si demandé et pas encore fait
+            # Optional flip to LPS if requested and not done yet
             target_coord = os.environ.get("TRACTVIEWER_NIFTI_COORD", "RAS").upper()
             if target_coord == "LPS" and ds.field_data.get("coord_system", ["RAS"]) [0] != "LPS":
-                # Appliquer flips R->L, A->P
+                # Apply the R->L, A->P flips
                 ds.points[:, 0] *= -1.0
                 ds.points[:, 1] *= -1.0
                 ds.field_data["coord_system"] = np.array(["LPS"], dtype=object)
             ds.field_data["tract_transformed"] = np.array([1 if is_voxel else 0], dtype=np.int8)
         except Exception as e:
-            warnings.warn(f"Projection tract échouée: {e}")
+            warnings.warn(f"Tract projection failed: {e}")
 
     @classmethod
     def from_paths(cls, paths: Sequence[DataInput], params_list: Optional[Sequence[ParamDict]] = None, **kwargs):
@@ -283,56 +290,56 @@ class TractViewer:
         return vis
 
     # ------------------------------
-    # Construction de la scène
+    # Scene building
     # ------------------------------
     def _ensure_plotter(self):
-        # Reconstruit si plotter absent ou déjà fermé
+        # Rebuild if the plotter is missing or already closed
         if self._plotter is not None and not getattr(self._plotter, "_closed", False):
             return
-        # Si un ancien plotter fermé reste référencé, on l'oublie
+        # If an old closed plotter is still referenced, forget it
         if self._plotter is not None and getattr(self._plotter, "_closed", False):
             self._plotter = None
         self._plotter = pv.Plotter(off_screen=self.off_screen)
         self._plotter.set_background(self.background)
-        # Recalcule (au cas où background modifié avant nouvel ensure)
+        # Recompute (in case the background changed before a new ensure)
         self._font_color = self._choose_font_color(self.background)
         self._show_scalar_bar_added = False
         for ds, prm in self._datasets:
             mesh = ds
-            # Threshold si demandé
+            # Threshold if requested
             if "threshold" in prm and prm["threshold"]:
                 arr_name, (vmin, vmax) = prm["threshold"]
                 if arr_name not in mesh.array_names:
-                    raise ValueError(f"Array '{arr_name}' introuvable pour threshold.")
+                    raise ValueError(f"Array '{arr_name}' not found for threshold.")
                 mesh = mesh.threshold(value=(vmin, vmax), scalars=arr_name, invert=False)
 
             display_array = prm.get("display_array")
             if display_array and display_array not in mesh.array_names:
-                raise ValueError(f"Array '{display_array}' introuvable dans dataset ({mesh.array_names}).")
+                raise ValueError(f"Array '{display_array}' not found in dataset ({mesh.array_names}).")
             if display_array:
-                # Assure que l'array est active (facilite la génération correcte de la show_scalar_bar)
+                # Make sure the array is active (helps show_scalar_bar)
                 try:
                     mesh.set_active_scalars(display_array)
                 except Exception:
                     pass
 
-            # Mapping des paramètres vers add_mesh
+            # Map parameters to add_mesh
             add_kwargs = dict(
                 scalars=display_array,
                 cmap=prm.get("cmap"),
                 clim=prm.get("clim"),
                 opacity=prm.get("opacity", 1.0),
                 show_edges=prm.get("show_edges", False),
-                # Une seule scalar bar globale (premier dataset éligible)
+                # A single global scalar bar (first eligible dataset)
                 show_scalar_bar=bool(display_array) and prm.get("show_scalar_bar", True) and not self._show_scalar_bar_added,
                 name=prm.get("name"),
                 color=prm.get("color"),
                 style=prm.get("style"),  # 'surface' | 'wireframe' | 'points'
             )
-            # Si rendu en points sans point_size défini, appliquer une valeur par défaut
+            # Points rendering without point_size: apply a default value
             if add_kwargs.get("style") == "points" and "point_size" not in prm:
                 add_kwargs["point_size"] = 5
-            # Option de rendu sphérique des points
+            # Spherical point rendering option
             if "points_as_spheres" in prm:
                 add_kwargs["points_as_spheres"] = prm["points_as_spheres"]
             if add_kwargs["show_scalar_bar"]:
@@ -341,7 +348,7 @@ class TractViewer:
                     "title": display_array or "",
                     "n_labels": 5,
                     "fmt": "%.2f",
-                    # Couleur de texte unifiée (ticks + titre)
+                    # Unified text color (ticks + title)
                     "color": self._font_color,
                 }
                 sb_defaults.update(sb_args)
@@ -353,17 +360,17 @@ class TractViewer:
             if add_kwargs.get("show_scalar_bar"):
                 self._show_scalar_bar_added = True
 
-        # Ajuster caméra globale
+        # Adjust the global camera
         if self._datasets:
-            self._plotter.camera_position = "xy"  # orientation initiale simple
+            self._plotter.camera_position = "xy"  # simple initial orientation
 
     # ------------------------------
-    # Rotations caméra robustes
+    # Robust camera rotations
     # ------------------------------
     def _rotate_camera(self, azimuth_deg: float = 0.0, elevation_deg: float = 0.0):
         """
-        Applique une rotation caméra en essayant d'abord les méthodes VTK,
-        sinon fallback par rotation de la position autour du focal point.
+        Rotate the camera with the VTK methods first,
+        otherwise fall back to rotating the position around the focal point.
         """
         cam = self._plotter.camera
         # Azimuth
@@ -384,7 +391,7 @@ class TractViewer:
                 self._rotate_camera_fallback(axis='x', angle_deg=elevation_deg)
 
     def _rotate_camera_fallback(self, axis: str, angle_deg: float):
-        """Fallback: rotation de la position caméra autour du focal point."""
+        """Fallback: rotate the camera position around the focal point."""
         cam = self._plotter.camera
         pos = np.array(cam.position)
         fp = np.array(cam.focal_point)
@@ -407,24 +414,24 @@ class TractViewer:
             return
         new_pos = fp + R.dot(vec)
         cam.position = new_pos.tolist()
-        # Optionnel: pas de modification du view_up ici (préserver stabilité)
+        # Optional: view_up is left unchanged here (keeps things stable)
 
     def _apply_rotation(self, azimuth_deg: float, elevation_deg: float):
-        """Rotation + rendu (indispensable off_screen pour que la caméra se propage aux captures)."""
+        """Rotate + render (required off-screen for the camera to reach the captures)."""
         self._rotate_camera(azimuth_deg=azimuth_deg, elevation_deg=elevation_deg)
         self._plotter.render()
 
     # ------------------------------
-    # Affichage interactif
+    # Interactive display
     # ------------------------------
     def show(self, **show_kwargs):
         self._ensure_plotter()
         if self.off_screen:
-            warnings.warn("off_screen=True : aucune fenêtre interactive ne s'ouvrira. Passez off_screen=False pour interaction.")
+            warnings.warn("off_screen=True: no interactive window will open. Pass off_screen=False for interaction.")
         return self._plotter.show(**show_kwargs)
 
     # ------------------------------
-    # Capture d'écran
+    # Screenshot
     # ------------------------------
     def capture_screenshot(self, output_path: Union[str, Path], transparent: bool = False):
         self._ensure_plotter()
@@ -434,11 +441,11 @@ class TractViewer:
         return img
 
     # ------------------------------
-    # Enregistrement vidéo / GIF
+    # Video / GIF recording
     # ------------------------------
     @staticmethod
     def _ffmpeg_encoder_available(ffmpeg_bin: str, encoder: str) -> bool:
-        """Retourne True si l'encodeur ffmpeg est disponible."""
+        """Return True if the ffmpeg encoder is available."""
         try:
             out = subprocess.run(
                 [ffmpeg_bin, "-hide_banner", "-encoders"],
@@ -446,7 +453,7 @@ class TractViewer:
             )
             if out.returncode != 0:
                 return False
-            # Chaque ligne des encoders commence par 2 lettres (flags) + espace + nom
+            # Each encoders line starts with 2 flag letters + space + name
             token = f" {encoder}"
             return any(line.strip().endswith(encoder) or f" {encoder} " in line for line in out.stdout.splitlines())
         except Exception:
@@ -455,8 +462,8 @@ class TractViewer:
     @staticmethod
     def _select_ffmpeg_codec(ffmpeg_bin: str, requested: str) -> Tuple[str, Optional[str]]:
         """
-        (CONSERVÉ pour compat) -> retourne premier codec dispo ou fallback.
-        Désormais remplacé par _codec_candidates, gardé si appelé ailleurs.
+        (KEPT for compatibility) -> returns the first available codec or a fallback.
+        Now superseded by _codec_candidates, kept in case it is called elsewhere.
         """
         order = [
             requested,
@@ -464,7 +471,7 @@ class TractViewer:
             "libx265", "hevc_nvenc", "hevc_qsv", "hevc_v4l2m2m", "hevc_vaapi",
             "libvpx_vp9", "libvpx_vp8",
             "mpeg4",
-            "ffv1",   # sans perte si dispo
+            "ffv1",   # lossless if available
         ]
         seen = set()
         for c in order:
@@ -475,23 +482,23 @@ class TractViewer:
                 if c == requested:
                     return c, None
                 return c, f"Codec '{requested}' indisponible -> fallback '{c}'."
-        # Aucun codec de la liste : laisser ffmpeg choisir (pas de -c:v)
-        return "", f"Codec '{requested}' indisponible, aucun fallback trouvé -> utilisation du codec par défaut ffmpeg."
+        # No codec from the list: let ffmpeg choose (no -c:v)
+        return "", f"Codec '{requested}' unavailable, no fallback found -> using the ffmpeg default codec."
 
     @staticmethod
     def _codec_candidates(ffmpeg_bin: str, requested: str, prefer_software: bool = True) -> List[str]:
         """
-        Retourne une liste ordonnée de codecs à essayer.
-        - Si prefer_software=True, ne met les codecs hardware (nvenc, qsv, vaapi, v4l2m2m) qu’en fin.
-        - Le codec explicitement demandé reste en tête (même si HW).
+        Return an ordered list of codecs to try.
+        - With prefer_software=True, hardware codecs (nvenc, qsv, vaapi, v4l2m2m) go last.
+        - The explicitly requested codec stays first (even if hardware).
         """
         hw_suffix = ("_nvenc", "_qsv", "_vaapi", "_v4l2m2m")
-        # Base logiciels (ordre de préférence)
+        # Software base (order of preference)
         software_set = [
             "libx264", "libopenh264", "mpeg4", "libxvid",
             "libvpx_vp9", "libvpx_vp8", "ffv1", "rawvideo"
         ]
-        # Encoders hardware potentiels
+        # Potential hardware encoders
         hardware_set = [
             "h264_nvenc", "hevc_nvenc",
             "h264_qsv", "hevc_qsv",
@@ -503,18 +510,18 @@ class TractViewer:
             ordered += [c for c in software_set if c not in ordered]
             ordered += [c for c in hardware_set if c not in ordered]
         else:
-            # Mélange requested -> hw -> software
+            # Mix requested -> hw -> software
             ordered += [c for c in hardware_set if c not in ordered]
             ordered += [c for c in software_set if c not in ordered]
-        # Filtrer doublons
+        # Remove duplicates
         uniq = []
         for c in ordered:
             if c and c not in uniq:
                 uniq.append(c)
-        # Garder uniquement ceux disponibles
+        # Keep only the available ones
         available = [c for c in uniq if TractViewer._ffmpeg_encoder_available(ffmpeg_bin, c)]
-        # Toujours ajouter fallback sans spécifier codec (marqueur "")
-        available.append("")  # "" => laisser ffmpeg décider
+        # Always add a fallback without codec (marker "")
+        available.append("")  # "" => let ffmpeg decide
         return available
 
     def record_rotation(
@@ -536,22 +543,22 @@ class TractViewer:
         prefer_software: bool = True,
     ):
         """
-        Effectue une rotation azimutale de la caméra et enregistre.
+        Rotate the camera in azimuth and record.
         gif=True => GIF via imageio.
         gif=False => MP4/AVI via:
-          1) imageio-ffmpeg si dispo (flux direct)
-          2) sinon binaire ffmpeg si présent
+            1) imageio-ffmpeg if available (direct stream)
+            2) otherwise the ffmpeg binary if present
           3) sinon erreur explicite
 
-        Paramètres qualité supplémentaires:
-          window_size: (w,h) taille finale souhaitée (sans supersample). Si None, taille actuelle.
-          supersample: facteur (>1) pour rendre en (w*factor, h*factor) puis encoder (améliore netteté).
-          anti_aliasing: active l'anti-aliasing (si supporté).
-          codec: encodeur vidéo ffmpeg/imageio (ex: libx264, mpeg4, libvpx_vp9).
-          bitrate: ex '8M' (si défini, ffmpeg utilisera ce débit).
-          crf: qualité cible (0-51, plus bas = meilleur) si codec type x264/x265 (ignoré si bitrate défini).
-          quality: param interne imageio (0-10) — conserver élevé (8-10) pour limiter la perte.
-         auto_codec_fallback: si True, sélection automatique d'un codec disponible si le demandé manque.
+        Additional quality parameters:
+            window_size: (w,h) desired final size (without supersampling). If None, current size.
+            supersample: factor (>1) to render at (w*factor, h*factor) before encoding (sharper).
+            anti_aliasing: enable anti-aliasing (if supported).
+            codec: ffmpeg/imageio video encoder (e.g. libx264, mpeg4, libvpx_vp9).
+            bitrate: e.g. '8M' (if set, ffmpeg uses this bitrate).
+            crf: target quality (0-51, lower = better) for x264/x265-like codecs (ignored if bitrate is set).
+            quality: imageio internal setting (0-10), keep high (8-10) to limit loss.
+          auto_codec_fallback: if True, automatically pick an available codec when the requested one is missing.
         """
         self._ensure_plotter()
         output_path = Path(output_path)
@@ -559,7 +566,7 @@ class TractViewer:
             output_path = output_path.with_suffix(".gif" if gif else ".mp4")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Gestion résolution / supersampling
+        # Resolution / supersampling
         original_size = getattr(self._plotter, "window_size", None)
         target_size = None
         if window_size:
@@ -573,14 +580,14 @@ class TractViewer:
             try:
                 self._plotter.window_size = target_size
             except Exception:
-                target_size = None  # fallback silencieux
+                target_size = None  # silent fallback
 
         if anti_aliasing:
             with contextlib.suppress(Exception):
                 self._plotter.enable_anti_aliasing()
 
         if gif and imageio is None:
-            gif = False  # fallback (mais nécessitera quand même imageio pour vidéo)
+            gif = False  # fallback (imageio is still needed for video)
 
         if gif:
             frames = []
@@ -589,17 +596,17 @@ class TractViewer:
                 self._apply_rotation(azimuth_deg=step, elevation_deg=elev_step)
                 frames.append(self._plotter.screenshot(return_img=True))
             imageio.mimsave(output_path, frames, fps=fps)
-            # Restauration taille
+            # Restore the size
             if original_size is not None and target_size is not None:
                 with contextlib.suppress(Exception):
                     self._plotter.window_size = original_size
             return str(output_path)
 
-        # --- Branche vidéo ---
+        # --- Video branch ---
         if imageio is None:
-            raise RuntimeError("imageio indisponible. Installez: pip install imageio imageio-ffmpeg ou ffmpeg système.")
+            raise RuntimeError("imageio unavailable. Install: pip install imageio imageio-ffmpeg, or a system ffmpeg.")
 
-        # 1) Essai imageio-ffmpeg
+        # 1) Try imageio-ffmpeg
         has_imageio_ffmpeg = False
         try:
             import imageio_ffmpeg  # noqa: F401
@@ -608,7 +615,7 @@ class TractViewer:
             pass
 
         if has_imageio_ffmpeg:
-            # Encodage en flux direct
+            # Direct stream encoding
             writer = None
             try:
                 writer_kwargs = dict(fps=fps, quality=quality, codec=codec)
@@ -620,7 +627,7 @@ class TractViewer:
                 if out_params:
                     writer_kwargs["output_params"] = out_params
                 writer = imageio.get_writer(str(output_path), fps=fps, quality=quality)
-                # Remplacer par writer avec kwargs (compat anciennes versions)
+                # Replace with a writer using kwargs (compatibility with older versions)
                 with contextlib.suppress(TypeError):
                     writer.close()
                     writer = imageio.get_writer(str(output_path), **writer_kwargs)
@@ -634,14 +641,14 @@ class TractViewer:
                     with contextlib.suppress(Exception):
                         writer.close()
                 self._plotter.close()
-                # Permettre reconstruction ultérieure (ex: vis.show())
+                # Allow a later rebuild (e.g. vis.show())
                 self._plotter = None
             if original_size is not None and target_size is not None:
                 with contextlib.suppress(Exception):
                     self._plotter.window_size = original_size
             return str(output_path)
 
-        # 2) Fallback binaire ffmpeg (frames temporaires PNG)
+        # 2) ffmpeg binary fallback (temporary PNG frames)
         ffmpeg_bin = shutil.which("ffmpeg")
         if ffmpeg_bin:
             temp_dir = Path(tempfile.mkdtemp(prefix="vtkvis_frames_"))
@@ -651,7 +658,7 @@ class TractViewer:
                     self._apply_rotation(azimuth_deg=step, elevation_deg=elev_step)
                     frame = self._plotter.screenshot(return_img=True)
                     imageio.imwrite(temp_dir / f"frame{i:05d}.png", frame)
-                # Essais multi-codecs
+                # Try several codecs
                 if auto_codec_fallback:
                     candidates = self._codec_candidates(ffmpeg_bin, codec, prefer_software=prefer_software)
                 else:
@@ -681,9 +688,9 @@ class TractViewer:
                     if proc.returncode == 0:
                         last_err = None
                         break
-                    last_err = f"Codec '{cdc or 'auto'}' échec:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+                    last_err = f"Codec '{cdc or 'auto'}' failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
                 if last_err:
-                    raise RuntimeError("ffmpeg a échoué après tous les fallbacks:\n" + last_err)
+                    raise RuntimeError("ffmpeg failed after all fallbacks:\n" + last_err)
             finally:
                 self._plotter.close()
                 self._plotter = None
@@ -694,17 +701,17 @@ class TractViewer:
                     self._plotter.window_size = original_size
             return str(output_path)
 
-        # 3) Erreur explicite
+        # 3) Explicit error
         raise RuntimeError(
-            "Aucun backend vidéo fonctionnel.\n"
-            "- Installez imageio-ffmpeg: pip install imageio-ffmpeg\n"
-            "ou\n"
-            "- Installez ffmpeg (ex: apt-get install ffmpeg)\n"
-            "Sinon utilisez gif=True pour générer un GIF."
+            "No working video backend.\n"
+            "- Install imageio-ffmpeg: pip install imageio-ffmpeg\n"
+            "or\n"
+            "- Install ffmpeg (e.g. apt-get install ffmpeg)\n"
+            "Otherwise use gif=True to write a GIF."
         )
 
     # ------------------------------
-    # Utilitaires
+    # Utilities
     # ------------------------------
     def list_arrays(self) -> Dict[str, List[str]]:
         out = {}
@@ -715,19 +722,19 @@ class TractViewer:
     @staticmethod
     def _choose_font_color(bg) -> str:
         """
-        Retourne 'black' ou 'white' selon la luminance du background.
-        Implémentation robuste sans dépendre de pyvista.parse_color (absent sur certaines versions).
+        Return 'black' or 'white' depending on the background luminance.
+        Robust implementation that does not rely on pyvista.parse_color (missing in some versions).
         Accepte:
-          - noms de couleurs (si matplotlib installé)
-          - code hex (#RRGGBB ou #RGB)
-          - tuple/list (r,g,b[,a]) avec composantes 0-1 ou 0-255
+            - color names (if matplotlib is installed)
+            - hex code (#RRGGBB or #RGB)
+            - tuple/list (r,g,b[,a]) with 0-1 or 0-255 components
         """
         def _norm_rgb(rgb):
             if max(rgb) > 1.0:
                 return [c / 255.0 for c in rgb]
             return rgb
 
-        # Tentative matplotlib
+        # Try matplotlib
         try:
             import matplotlib.colors as mcolors
             try:
@@ -739,7 +746,7 @@ class TractViewer:
         except Exception:
             pass
 
-        # Tuples / listes
+        # Tuples / lists
         if isinstance(bg, (tuple, list)) and 3 <= len(bg) <= 4:
             try:
                 r, g, b = _norm_rgb(list(bg)[:3])
@@ -748,7 +755,7 @@ class TractViewer:
             except Exception:
                 return "black"
 
-        # Hex manuel
+        # Manual hex
         if isinstance(bg, str) and bg.startswith("#"):
             h = bg.lstrip("#")
             if len(h) == 3:
@@ -763,12 +770,12 @@ class TractViewer:
                 except Exception:
                     return "black"
 
-        # Fallback par défaut
+        # Default fallback
         return "black"
 
 
 # -------------------------------------------------
-# Exemple d'utilisation (protégé par __main__)
+# Usage example (guarded by __main__)
 # -------------------------------------------------
 if __name__ == "__main__":
     #Set TRACTVIEWER_NIFTI_COORD=LPS in env to have nifti in LPS
@@ -782,7 +789,7 @@ if __name__ == "__main__":
             "cmap": "viridis",
             "threshold": ("point_index", (0, 24)),
             "opacity": 0.9,
-            "show_scalar_bar": True,  # mappé vers show_scalar_bar
+            "show_scalar_bar": True,  # mapped to show_scalar_bar
             "name": "associations",
         }
     ).add(
@@ -829,5 +836,5 @@ if __name__ == "__main__":
     
     # vis.capture_screenshot("capture.png")
     # vis.record_rotation("rotation.mp4", n_frames=240, step=1.5, quality=10)
-    vis.show()  # si rendu interactif possible
-    # vis.show()  # si rendu interactif possible
+    vis.show()  # if interactive rendering is possible
+    # vis.show()  # if interactive rendering is possible

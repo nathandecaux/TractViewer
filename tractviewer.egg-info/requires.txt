@@ -10,3 +10,8 @@ imageio-ffmpeg
 
 [offscreen]
 vtk-osmesa
+
+[web]
+trame
+trame-vtk
+trame-vuetify

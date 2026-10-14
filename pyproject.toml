@@ -1,7 +1,7 @@
 [project]
 name = "tractviewer"
 version = "0.1.0"
-description = "Visualisation simplifiée de tractographies / surfaces VTK (headless possible)"
+description = "Tractography, surface and NIfTI viewer: vtk.js web interface and headless pyvista rendering"
 authors = [ { name = "Anonymous" } ]
 license = { text = "MIT" }
 readme = "README.md"
@@ -29,3 +29,9 @@ tractviewer = "tractviewer.cli:main"
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tractviewer*"]
+
+[tool.setuptools.package-data]
+"tractviewer.web" = ["*.html"]

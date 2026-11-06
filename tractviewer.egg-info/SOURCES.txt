@@ -9,6 +9,7 @@ tractviewer/backend.py
 tractviewer/cli.py
 tractviewer/core.py
 tractviewer/debug.py
+tractviewer/envelope.py
 tractviewer/enveloppe.py
 tractviewer/geometry.py
 tractviewer/loaders.py
@@ -24,7 +25,6 @@ tractviewer.egg-info/entry_points.txt
 tractviewer.egg-info/requires.txt
 tractviewer.egg-info/top_level.txt
 tractviewer/web/__init__.py
-tractviewer/web/app.py
-tractviewer/web/viewer.py
+tractviewer/web/server.py
 tractviewer/web/vtkjs.py
 tractviewer/web/vtkjs_template.html

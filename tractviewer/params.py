@@ -30,7 +30,7 @@ DISPLAY_PARAMS = {
     "points_as_spheres", "ambient", "specular", "diffuse",
     "envelope_voxel_size", "envelope_smooth",
 }
-LOAD_PARAMS = {"marching_cubes", "smooth", "iso"}
+LOAD_PARAMS = {"marching_cubes", "smooth", "iso", "coord_system"}
 KNOWN_PARAMS = DISPLAY_PARAMS | LOAD_PARAMS
 
 # Alternative name -> canonical name.

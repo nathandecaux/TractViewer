@@ -84,6 +84,47 @@
   }
   #legend canvas { display: block; width: 100%; height: 12px; border-radius: 3px; margin: 6px 0 2px; }
   #legend .ticks { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  #legend-classes { display: grid; grid-template-columns: 14px 1fr; gap: 3px 8px; align-items: center; margin-top: 6px; max-height: 40vh; overflow-y: auto; font-variant-numeric: tabular-nums; }
+  #legend-classes i { display: block; width: 14px; height: 12px; border-radius: 2px; border: 1px solid var(--border); }
+  .field { margin: 10px 0 0; }
+  .field-label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  .cmap-picker { position: relative; }
+  .cmap-button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
+  .cmap-button .name, .cmap-option .name { flex: none; width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .swatch { flex: 1; min-width: 0; height: 12px; border-radius: 3px; border: 1px solid var(--border); }
+  .cmap-menu {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; max-height: 360px; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .2);
+  }
+  .cmap-group, .cmap-menu summary {
+    padding: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600;
+  }
+  .cmap-menu summary { cursor: pointer; border-top: 1px solid var(--border); }
+  .cmap-option { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .cmap-option:hover { background: var(--bg); }
+  .cmap-option.current { background: var(--accent-soft); }
+  .cmap-option .count { flex: none; width: 18px; text-align: right; font-size: 10px; color: var(--muted); }
+  .segmented { display: flex; }
+  .segmented button { flex: 1; border-radius: 0; }
+  .segmented button:first-child { border-radius: 6px 0 0 6px; }
+  .segmented button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .segmented button.active { background: var(--accent-soft); border-color: var(--accent); }
+  .class-row { display: grid; grid-template-columns: 36px 26px 1fr 1fr 20px; gap: 4px; align-items: center; margin-top: 4px; }
+  .class-row input[type=number] { width: 100%; min-width: 0; padding: 3px 5px; }
+  .class-row input[type=color] { width: 36px; height: 24px; }
+  .class-head { color: var(--muted); font-size: 11px; margin-top: 8px; }
+  #class-list { max-height: 260px; overflow-y: auto; }
+  .empty-toggle { padding: 0; height: 24px; font-size: 13px; line-height: 1; color: var(--muted); }
+  .empty-toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+  .checker { background: repeating-conic-gradient(#c4c8d0 0 25%, #ffffff 0 50%) 50% / 8px 8px !important; }
+  input[type=color].checker { opacity: .55; }
+  .other-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: var(--muted); font-size: 12px; }
+  .other-row > span:last-child { display: flex; gap: 4px; }
+  .other-row .empty-toggle { width: 26px; }
+  #view-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+  #ras-axes { position: absolute; cursor: grab; touch-action: none; z-index: 5; }
+  #ras-axes.dragging { cursor: grabbing; }
   h3 { font-size: 12px; margin: 16px 0 0; font-weight: 600; }
   #loading {
     position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; gap: 12px;
@@ -132,12 +173,44 @@
     <p id="item-info" class="muted"></p>
     <label data-kind="mesh">Array <select id="array"></select></label>
     <div id="scalar-controls">
-      <label>Colormap <select id="cmap"></select></label>
+      <div class="field"><span class="field-label">Coloring</span>
+        <div class="segmented" id="color-mode">
+          <button type="button" data-mode="continuous">Continuous</button>
+          <button type="button" data-mode="discrete">Discrete</button>
+        </div>
+      </div>
+      <div id="continuous-controls">
+        <div class="field"><span class="field-label">Colormap</span><div class="cmap-picker" id="cmap"></div></div>
+        <label class="inline">Reverse colormap <input type="checkbox" id="cmap-reverse"></label>
+      </div>
       <div class="row">
         <label>Min <input type="number" id="range-min" step="any"></label>
         <label>Max <input type="number" id="range-max" step="any"></label>
       </div>
       <div class="actions"><button id="range-auto" type="button">Auto range</button></div>
+      <div id="discrete-controls">
+        <h3>Classes</h3>
+        <div class="field"><span class="field-label">Palette</span><div class="cmap-picker" id="class-palette"></div></div>
+        <div class="row">
+          <label>Method
+            <select id="class-method">
+              <option value="unique">Unique values</option>
+              <option value="equal">Equal intervals (min–max)</option>
+              <option value="quantile">Quantiles</option>
+            </select>
+          </label>
+          <label>Classes <input type="number" id="class-count" min="1" max="64" step="1"></label>
+        </div>
+        <div class="actions"><button id="class-generate" type="button">Generate classes</button></div>
+        <p id="class-status" class="muted"></p>
+        <div class="class-row class-head"><span>Color</span><span title="Empty: hide the values of the class">∅</span><span>From</span><span>To</span><span></span></div>
+        <div id="class-list"></div>
+        <div class="actions"><button id="class-add" type="button">+ Add class</button></div>
+        <div class="other-row"><span>Other values</span>
+          <span><input type="color" id="class-other">
+          <button type="button" id="class-other-empty" class="empty-toggle" title="Empty: hide values outside every class">∅</button></span>
+        </div>
+      </div>
     </div>
     <label id="color-row" class="inline" data-kind="mesh">Color <input type="color" id="color"></label>
     <label data-kind="mesh">Representation
@@ -182,7 +255,31 @@
       <button id="reset" type="button">Reset camera</button>
       <button id="shot" type="button">PNG capture</button>
     </div>
+    <div class="field"><span class="field-label">Layout</span>
+      <div class="segmented" id="layout-mode">
+        <button type="button" data-mode="single">3D</button>
+        <button type="button" data-mode="quad">3 slices + 3D</button>
+      </div>
+    </div>
+    <div id="layout-options">
+      <label class="inline">Objects in 2D views <input type="checkbox" id="objects-2d"></label>
+      <label>2D slab thickness (mm) <output id="slab-2d-out"></output><input type="range" id="slab-2d" min="0.5" max="40" step="0.5"></label>
+      <p class="muted">2D views: wheel = slice (Shift ×5, Ctrl = zoom) · click/drag = move the cross ·
+        right-drag = zoom · Shift/middle-drag = pan · double-click = reset.</p>
+    </div>
     <label class="inline">Background <input type="color" id="background"></label>
+    <label class="inline">RAS axes <input type="checkbox" id="ras-toggle"></label>
+    <div id="ras-options">
+      <label>Axes size <output id="ras-size-out"></output><input type="range" id="ras-size" min="60" max="260" step="10"></label>
+      <p class="muted">Drag the axes in the view to move them. They are included in PNG and GIF captures.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Export</h2>
+    <p class="muted">Current scene (objects, display settings, isosurfaces, slices, camera) as a single HTML file.</p>
+    <div class="actions"><button id="export-html" type="button">Export to standalone HTML</button></div>
+    <p id="export-status" class="muted"></p>
   </section>
 
   <section>
@@ -201,10 +298,15 @@
 <main>
   <div id="view"></div>
   <div id="loading"><div class="spinner"></div><span id="loading-text">Loading scene…</span></div>
+  <canvas id="view-overlay" hidden></canvas>
+  <canvas id="ras-axes" hidden title="RAS axes — drag to move"></canvas>
   <div id="legend" hidden>
     <div id="legend-title"></div>
-    <canvas id="legend-bar" width="256" height="1"></canvas>
-    <div class="ticks muted"><span id="legend-min"></span><span id="legend-max"></span></div>
+    <div id="legend-continuous">
+      <canvas id="legend-bar" width="256" height="1"></canvas>
+      <div class="ticks muted"><span id="legend-min"></span><span id="legend-max"></span></div>
+    </div>
+    <div id="legend-classes"></div>
   </div>
 </main>
 
@@ -215,6 +317,9 @@
   'use strict';
 
   const SCENE = JSON.parse(document.getElementById('scene').textContent);
+  // Untouched copy of the page (before any DOM change), reused by the HTML export.
+  const PRISTINE = document.documentElement.cloneNode(true);
+  PRISTINE.querySelector('#scene').textContent = '';
   const GIFENC_URL = '__GIFENC_URL__';
   const $ = (id) => document.getElementById(id);
 
@@ -230,7 +335,8 @@
   const { vtkGenericRenderWindow } = vtk.Rendering.Misc;
   const { vtkActor, vtkMapper, vtkColorTransferFunction, vtkImageMapper, vtkImageSlice } = vtk.Rendering.Core;
   const { vtkPolyData, vtkImageData, vtkPlane } = vtk.Common.DataModel;
-  const { vtkDataArray } = vtk.Common.Core;
+  const { vtkDataArray, vtkLookupTable } = vtk.Common.Core;
+  const { vtkPiecewiseFunction } = vtk.Common.DataModel;
   const { vtkPlaneSource } = vtk.Filters.Sources;
   const { vtkImageMarchingCubes, vtkWindowedSincPolyDataFilter } = vtk.Filters.General;
   const { vtkPolyDataNormals } = vtk.Filters.Core;
@@ -242,6 +348,13 @@
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new Type(bytes.buffer);
   }
+  function encode(values) {
+    const bytes = new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  const asType = (values, Type) => (values instanceof Type ? values : Type.from(values));
   function hexToRgb(hex) {
     const v = parseInt(hex.slice(1), 16);
     return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
@@ -277,12 +390,134 @@
   }
   const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+  const rgbToHex = (rgb) => `#${rgb.map((c) => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, '0')).join('')}`;
+
+  // ---------- Colormaps ----------
+  // SCENE.colormaps: {name: [[x, r, g, b], ...]}; SCENE.cmapInfo: {name: {group, n}}
+  // (n = number of colors of a categorical colormap, 0 when continuous).
+  SCENE.cmapInfo = SCENE.cmapInfo || {};
   const colormap = (name) => SCENE.colormaps[name] || SCENE.colormaps.viridis;
-  function fillLut(lut, cmapName, lo, hi) {
+  const cmapInfo = (name) => SCENE.cmapInfo[name] || { group: 'Custom', n: 0 };
+  function cmapPoints(name, reverse) {
+    const points = colormap(name);
+    return reverse ? points.map(([x, r, g, b]) => [1 - x, r, g, b]).reverse() : points;
+  }
+  function fillLut(lut, cmapName, lo, hi, reverse) {
     if (hi <= lo) hi = lo + 1e-6;
     lut.removeAllPoints();
-    for (const [x, r, g, b] of colormap(cmapName)) lut.addRGBPoint(lo + x * (hi - lo), r, g, b);
+    for (const [x, r, g, b] of cmapPoints(cmapName, reverse)) lut.addRGBPoint(lo + x * (hi - lo), r, g, b);
   }
+  function cssGradient(name, reverse) {
+    const stops = cmapPoints(name, reverse).map(([x, r, g, b]) => `${rgbToHex([r, g, b])} ${(x * 100).toFixed(2)}%`);
+    return `linear-gradient(to right, ${stops.join(', ')})`;
+  }
+  function sampleColormap(name, x) {
+    const points = colormap(name);
+    let i = 1;
+    while (i < points.length - 1 && points[i][0] < x) i++;
+    const [x0, ...c0] = points[i - 1], [x1, ...c1] = points[i];
+    const t = x1 > x0 ? clamp((x - x0) / (x1 - x0), 0, 1) : 0;
+    return c0.map((c, k) => c + t * (c1[k] - c));
+  }
+  // n colors from a palette: categorical -> its colors in order (cycled), continuous -> evenly sampled.
+  function paletteColors(name, n) {
+    const { n: count } = cmapInfo(name);
+    const points = colormap(name);
+    return Array.from({ length: n }, (_, i) => rgbToHex(count
+      ? points[2 * (i % count)].slice(1)
+      : sampleColormap(name, n === 1 ? 0.5 : i / (n - 1))));
+  }
+
+  // Discrete coloring: classes [{color, lo, hi}] (lo == hi: a single value), first match wins;
+  // values outside every class get `other`. Built as a step color transfer function.
+  const newDiscrete = () => ({ enabled: false, palette: 'tab10', method: 'unique', count: 5, classes: [], other: '#808080', otherHidden: false });
+  // Step segments [{a, b, color, hidden}] covering the classes and the data range.
+  function discreteSegments(d, dataRange) {
+    const other = { color: hexToRgb(d.other), hidden: Boolean(d.otherHidden) };
+    const breaks = new Set([dataRange[0], dataRange[1]]);
+    const classes = d.classes.filter((c) => isFinite(c.lo) && isFinite(c.hi));
+    classes.forEach((c) => { breaks.add(c.lo); breaks.add(c.hi); });
+    let sorted = [...breaks].sort((a, b) => a - b);
+    let gap = Infinity;
+    for (let i = 1; i < sorted.length; i++) if (sorted[i] > sorted[i - 1]) gap = Math.min(gap, sorted[i] - sorted[i - 1]);
+    const half = isFinite(gap) ? gap / 2 : 0.5;
+    const intervals = classes.map((c) => {
+      let lo = Math.min(c.lo, c.hi), hi = Math.max(c.lo, c.hi);
+      if (hi - lo <= 1e-12 * Math.max(1, Math.abs(lo))) { lo -= half; hi += half; }  // single value
+      return { lo, hi, style: { color: hexToRgb(c.color), hidden: Boolean(c.hidden) } };
+    });
+    intervals.forEach(({ lo, hi }) => { breaks.add(lo); breaks.add(hi); });
+    sorted = [...breaks].sort((a, b) => a - b);
+    if (sorted.length < 2) sorted.push(sorted[0] + 1);
+    const segments = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const [a, b] = [sorted[i - 1], sorted[i]];
+      if (b <= a) continue;
+      const mid = (a + b) / 2;
+      const hit = intervals.find((iv) => mid >= iv.lo && mid <= iv.hi);
+      const style = hit ? hit.style : other;
+      const last = segments[segments.length - 1];
+      if (last && last.style === style) last.b = b;
+      else segments.push({ a, b, style });
+    }
+    return segments.map(({ a, b, style }) => ({ a, b, color: style.color, hidden: style.hidden }));
+  }
+  const hasHidden = (d) => Boolean(d && d.enabled && (d.otherHidden || d.classes.some((c) => c.hidden)));
+
+  // Color transfer function (RGB only: hidden classes keep their color, see the opacity below).
+  function fillDiscreteLut(lut, d, dataRange) {
+    lut.removeAllPoints();
+    const segments = discreteSegments(d, dataRange);
+    const eps = (segments[segments.length - 1].b - segments[0].a) * 1e-7 || 1e-9;
+    segments.forEach(({ a, b, color }, i) => {
+      lut.addRGBPoint(a, ...color);
+      lut.addRGBPoint(i < segments.length - 1 ? b - eps : b, ...color);
+    });
+  }
+  // RGBA lookup table (meshes with hidden classes: alpha 0, discarded in the shader).
+  const TABLE_SIZE = 4096;
+  function fillDiscreteTable(table, d, dataRange) {
+    const segments = discreteSegments(d, dataRange);
+    const lo = segments[0].a, hi = segments[segments.length - 1].b;
+    const rows = [];
+    let k = 0;
+    for (let i = 0; i < TABLE_SIZE; i++) {
+      const v = lo + (i + 0.5) * (hi - lo) / TABLE_SIZE;
+      while (k < segments.length - 1 && v > segments[k].b) k++;
+      const { color, hidden } = segments[k];
+      rows.push([...color.map((c) => Math.round(c * 255)), hidden ? 0 : 255]);
+    }
+    table.setTable(rows);
+    table.setMappingRange(lo, hi);
+  }
+  // Opacity of volume slices: 0 on hidden classes.
+  function fillDiscreteOpacity(pwf, d, dataRange) {
+    pwf.removeAllPoints();
+    const segments = discreteSegments(d, dataRange);
+    const eps = (segments[segments.length - 1].b - segments[0].a) * 1e-7 || 1e-9;
+    segments.forEach(({ a, b, hidden }, i) => {
+      pwf.addPoint(a, hidden ? 0 : 1);
+      pwf.addPoint(i < segments.length - 1 ? b - eps : b, hidden ? 0 : 1);
+    });
+  }
+  // Fragments of hidden classes are discarded: they neither show nor hide what is behind.
+  function setDiscard(mapper, replacement) {
+    const props = mapper.getViewSpecificProperties();
+    props.OpenGL = props.OpenGL || {};
+    const current = props.OpenGL.ShaderReplacements || [];
+    const next = replacement ? [replacement] : [];
+    if (JSON.stringify(current) === JSON.stringify(next)) return;
+    props.OpenGL.ShaderReplacements = next;
+    mapper.modified();
+  }
+  const MESH_DISCARD = {
+    shaderType: 'Fragment', originalValue: '//VTK::Color::Impl', replaceFirst: true, replaceAll: false,
+    replacementValue: '//VTK::Color::Impl\n  if (texColor.a < 0.5) { discard; }',
+  };
+  const SLICE_DISCARD = {
+    shaderType: 'Fragment', originalValue: '//VTK::TCoord::Impl', replaceFirst: true, replaceAll: false,
+    replacementValue: '//VTK::TCoord::Impl\n  if (scalarOpacity < 0.5) { discard; }',
+  };
 
   // ---------- Rendering ----------
   const grw = vtkGenericRenderWindow.newInstance({
@@ -326,12 +561,14 @@
       (a.location === 'point' ? polydata.getPointData() : polydata.getCellData()).addArray(da);
       arrays[`${a.location}:${a.name}`] = { name: a.name, location: a.location, components: a.components, range: a.range };
     }
+    if (spec.normals) {
+      polydata.getPointData().setNormals(vtkDataArray.newInstance({ name: 'Normals', values: decode(spec.normals, Float32Array), numberOfComponents: 3 }));
+    }
     return { polydata, arrays };
   }
 
   // `spec` holds the display settings (same fields as a serialized layer, without the data).
-  function createMesh(spec, polydata, arrays, previous) {
-    const lut = vtkColorTransferFunction.newInstance();
+  function meshActor(spec, polydata, lut, target) {
     const mapper = vtkMapper.newInstance({ interpolateScalarsBeforeMapping: true, useLookupTableScalarRange: true });
     mapper.setInputData(polydata);
     mapper.setLookupTable(lut);
@@ -343,15 +580,25 @@
     prop.setAmbient(spec.ambient);
     prop.setDiffuse(spec.diffuse);
     prop.setSpecular(spec.specular);
-    renderer.addActor(actor);
+    target.addActor(actor);
+    return { mapper, actor };
+  }
 
-    const ranges = previous ? previous.ranges : {};
+  function createMesh(spec, polydata, arrays, previous) {
+    const lut = vtkColorTransferFunction.newInstance();
+    const { mapper, actor } = meshActor(spec, polydata, lut, renderer);
+    // One more actor per 2D view (own clipping slab), sharing the data and the LUT.
+    const views = views2d.map((view) => meshActor(spec, polydata, lut, view.renderer));
+
+    const ranges = previous ? previous.ranges : JSON.parse(JSON.stringify(spec.ranges || {}));
     if (!previous && spec.activeArray && spec.clim) ranges[spec.activeArray] = spec.clim.slice();
     const mesh = {
       kind: 'mesh', id: spec.id, name: spec.name, nPoints: spec.nPoints, nCells: spec.nCells,
-      bounds: polydata.getBounds(), arrays, lut, mapper, actor, ranges,
+      bounds: polydata.getBounds(), spec, polydata, arrays, lut, table: vtkLookupTable.newInstance(), mapper, actor, views, ranges,
+      // Discrete coloring per array: {arrayKey: newDiscrete()}.
+      discrete: previous ? previous.discrete : JSON.parse(JSON.stringify(spec.discrete || {})),
       state: previous ? previous.state : {
-        arrayKey: spec.activeArray, cmap: spec.cmap || 'viridis', color: spec.color,
+        arrayKey: spec.activeArray, cmap: spec.cmap || 'viridis', cmapReverse: Boolean(spec.cmapReverse), color: spec.color,
         opacity: spec.opacity, lineWidth: spec.lineWidth, pointSize: spec.pointSize,
         representation: spec.representation, visible: spec.visible,
       },
@@ -368,27 +615,48 @@
   }
 
   function applyMesh(mesh) {
-    const { state, mapper, actor, lut } = mesh;
-    const prop = actor.getProperty();
+    const { state, lut, table } = mesh;
     const arr = state.arrayKey ? mesh.arrays[state.arrayKey] : null;
+    const d = arr ? mesh.discrete[state.arrayKey] : null;
+    const hidden = hasHidden(d);
     if (arr) {
       const [lo, hi] = meshRange(mesh);
-      fillLut(lut, state.cmap, lo, hi);
-      if (arr.components > 1) lut.setVectorModeToMagnitude();
-      mapper.setScalarVisibility(true);
-      mapper.setColorByArrayName(arr.name);
-      if (arr.location === 'point') mapper.setScalarModeToUsePointFieldData();
-      else mapper.setScalarModeToUseCellFieldData();
-      mapper.setColorModeToMapScalars();
-    } else {
-      mapper.setScalarVisibility(false);
-      prop.setColor(...hexToRgb(state.color));
+      if (hidden) fillDiscreteTable(table, d, arr.range);
+      else if (d && d.enabled) fillDiscreteLut(lut, d, arr.range);
+      else fillLut(lut, state.cmap, lo, hi, state.cmapReverse);
+      if (arr.components > 1) { lut.setVectorModeToMagnitude(); table.setVectorModeToMagnitude(); }
     }
-    prop.setOpacity(state.opacity);
-    prop.setLineWidth(state.lineWidth);
-    prop.setPointSize(state.pointSize);
-    prop.setRepresentation(REPRESENTATION[state.representation] ?? 2);
-    actor.setVisibility(state.visible);
+    const targets = [{ mapper: mesh.mapper, actor: mesh.actor, main: true }, ...mesh.views];
+    for (const { mapper, actor, main } of targets) {
+      const prop = actor.getProperty();
+      if (mapper.getLookupTable() !== (hidden ? table : lut)) mapper.setLookupTable(hidden ? table : lut);
+      setDiscard(mapper, hidden ? MESH_DISCARD : null);
+      // The RGBA table makes vtk.js render the mesh as translucent: keep it opaque (discard instead).
+      actor.setForceOpaque(hidden && state.opacity >= 1);
+      if (arr) {
+        mapper.setScalarVisibility(true);
+        mapper.setColorByArrayName(arr.name);
+        if (arr.location === 'point') mapper.setScalarModeToUsePointFieldData();
+        else mapper.setScalarModeToUseCellFieldData();
+        mapper.setColorModeToMapScalars();
+      } else {
+        mapper.setScalarVisibility(false);
+        prop.setColor(...hexToRgb(state.color));
+      }
+      prop.setOpacity(state.opacity);
+      prop.setLineWidth(state.lineWidth);
+      prop.setPointSize(state.pointSize);
+      prop.setRepresentation(REPRESENTATION[state.representation] ?? 2);
+      actor.setVisibility(state.visible && (main || layout.objects2d));
+    }
+  }
+  function removeMeshActors(mesh) {
+    renderer.removeActor(mesh.actor);
+    mesh.views.forEach(({ actor }, k) => views2d[k].renderer.removeActor(actor));
+  }
+  function removeVolumeActors(volume) {
+    volume.slices.forEach(({ actor }) => renderer.removeActor(actor));
+    volume.views.forEach(({ actor }, k) => views2d[k].renderer.removeActor(actor));
   }
 
   // ---------- Volumes (slices) ----------
@@ -401,7 +669,7 @@
       name: 'intensity', values: decode(spec.data, Float32Array), numberOfComponents: 1,
     }));
     const lut = vtkColorTransferFunction.newInstance();
-    const slices = AXES.map((_, axis) => {
+    const sliceActor = (axis, target) => {
       const mapper = vtkImageMapper.newInstance();
       mapper.setInputData(image);
       mapper.setSlicingMode(axis);  // I, J, K: grid aligned with the world axes
@@ -411,18 +679,23 @@
       prop.setRGBTransferFunction(0, lut);
       prop.setUseLookupTableScalarRange(true);
       prop.setInterpolationTypeToLinear();
-      renderer.addActor(actor);
+      target.addActor(actor);
       return { mapper, actor };
-    });
+    };
+    const slices = AXES.map((_, axis) => sliceActor(axis, renderer));
+    const views = views2d.map((view) => sliceActor(view.axis, view.renderer));
     const bounds = [];
     for (let i = 0; i < 3; i++) bounds.push(spec.origin[i], spec.origin[i] + spec.spacing[i] * (spec.dims[i] - 1));
     const volume = {
       kind: 'volume', id: spec.id, name: spec.name, dims: spec.dims, origin: spec.origin,
-      spacing: spec.spacing, bounds, fullRange: spec.range, window: spec.window, image, lut, slices,
+      spacing: spec.spacing, bounds, fullRange: spec.range, window: spec.window, spec, image, lut,
+      pwf: vtkPiecewiseFunction.newInstance(), slices, views,
       state: {
-        cmap: 'gray', range: spec.window.slice(), opacity: 1, visible: spec.visible,
+        cmap: 'gray', cmapReverse: false, range: spec.window.slice(), opacity: 1, visible: spec.visible,
+        discrete: newDiscrete(),
         // Default iso value between the background and the low end of the window: outer surface.
         isoValue: (spec.range[0] + spec.window[0]) / 2, isoSmooth: 20,
+        ...(spec.state ? JSON.parse(JSON.stringify(spec.state)) : {}),
       },
     };
     applyVolume(volume);
@@ -431,8 +704,22 @@
 
   function applyVolume(volume) {
     const { state } = volume;
-    fillLut(volume.lut, state.cmap, state.range[0], state.range[1]);
-    volume.slices.forEach(({ actor }) => actor.getProperty().setOpacity(state.opacity));
+    const discrete = Boolean(state.discrete && state.discrete.enabled);
+    const hidden = hasHidden(state.discrete);
+    if (hidden) fillDiscreteOpacity(volume.pwf, state.discrete, volume.fullRange);
+    if (discrete) fillDiscreteLut(volume.lut, state.discrete, volume.fullRange);
+    else fillLut(volume.lut, state.cmap, state.range[0], state.range[1], state.cmapReverse);
+    [...volume.slices, ...volume.views].forEach(({ actor }, i) => {
+      const prop = actor.getProperty();
+      const opacity = i < volume.slices.length ? state.opacity : 1;
+      prop.setOpacity(opacity);
+      if (prop.getPiecewiseFunction(0) !== (hidden ? volume.pwf : null)) prop.setPiecewiseFunction(0, hidden ? volume.pwf : null);
+      setDiscard(actor.getMapper(), hidden ? SLICE_DISCARD : null);
+      actor.setForceOpaque(hidden && opacity >= 1);
+      // Label maps: no blending between neighboring labels.
+      if (discrete) prop.setInterpolationTypeToNearest();
+      else prop.setInterpolationTypeToLinear();
+    });
   }
 
   // ---------- Isosurface (marching cubes, computed in the browser) ----------
@@ -468,7 +755,7 @@
 
       const id = isoId(volume.id);
       const previous = meshes.get(id);
-      if (previous) renderer.removeActor(previous.actor);
+      if (previous) removeMeshActors(previous);
       const spec = {
         id, name: `${volume.name} (isosurface)`, nPoints: surface.getNumberOfPoints(),
         nCells: surface.getNumberOfCells(), activeArray: null, color: '#d9c7ad', opacity: 0.4,
@@ -493,6 +780,13 @@
 
   // ---------- Slices ----------
   const slicing = { ref: 'scene', enabled: [false, false, false], pos: [0, 0, 0], clip: 'none', thickness: 4 };
+  const sliceInputs = [];  // {slider, out} per axis (Slices panel)
+  function syncSliceInputs() {
+    sliceInputs.forEach(({ slider, out }, i) => {
+      slider.value = slicing.pos[i];
+      out.textContent = `${fmt(slicing.pos[i])} mm`;
+    });
+  }
   const planes = AXES.map((axis) => {
     const source = vtkPlaneSource.newInstance();
     const mapper = vtkMapper.newInstance();
@@ -540,6 +834,7 @@
       slicing.pos = [0, 1, 2].map((i) => (b[2 * i] + b[2 * i + 1]) / 2);
     }
     renderSlicing();
+    if (layout.mode === 'quad') views2d.forEach(reset2D);
     applySlicing();
   }
 
@@ -558,12 +853,14 @@
     const b = refBounds();
     for (const volume of volumes.values()) {
       const active = ref === volume && volume.state.visible;
+      const sliceIndex = (axis) => clamp(Math.round((slicing.pos[axis] - volume.origin[axis]) / volume.spacing[axis]), 0, volume.dims[axis] - 1);
       volume.slices.forEach(({ mapper, actor }, axis) => {
         actor.setVisibility(active && slicing.enabled[axis]);
-        if (active) {
-          const idx = Math.round((slicing.pos[axis] - volume.origin[axis]) / volume.spacing[axis]);
-          mapper.setSlice(clamp(idx, 0, volume.dims[axis] - 1));
-        }
+        if (active) mapper.setSlice(sliceIndex(axis));
+      });
+      volume.views.forEach(({ mapper, actor }, k) => {
+        actor.setVisibility(active);
+        if (active) mapper.setSlice(sliceIndex(views2d[k].axis));
       });
     }
     const showPlanes = !ref || ref.kind !== 'volume';
@@ -581,6 +878,17 @@
       source.setPoint2(...p2);
     });
     for (const mesh of meshes.values()) {
+      mesh.views.forEach(({ mapper }, k) => {  // 2D views: slab around their slice
+        const axis = views2d[k].axis;
+        mapper.removeAllClippingPlanes();
+        for (const sign of [1, -1]) {
+          const origin = [0, 0, 0], normal = [0, 0, 0];
+          origin[axis] = slicing.pos[axis] - sign * layout.slab2d / 2;
+          normal[axis] = sign;
+          mapper.addClippingPlane(vtkPlane.newInstance({ origin, normal }));
+        }
+        mapper.modified();
+      });
       mesh.mapper.removeAllClippingPlanes();
       if (slicing.clip === 'none') continue;
       slicing.enabled.forEach((on, axis) => {
@@ -598,6 +906,8 @@
       });
       mesh.mapper.modified();
     }
+    if (layout.mode === 'quad') views2d.forEach((v) => v.renderer.resetCameraClippingRange());
+    drawViewOverlay();
     render();
   }
 
@@ -617,6 +927,7 @@
     const b = refBounds();
     const container = $('slice-axes');
     container.replaceChildren();
+    sliceInputs.length = 0;
     AXES.forEach((axis, i) => {
       const lo = b[2 * i], hi = b[2 * i + 1];
       const step = ref && ref.kind === 'volume' ? ref.spacing[i] : Math.max((hi - lo) / 200, 1e-3);
@@ -634,6 +945,7 @@
         out.textContent = `${fmt(slicing.pos[i])} mm`;
         applySlicing();
       });
+      sliceInputs[i] = { slider, out };
       const title = el('span', {}, [checkbox, document.createTextNode(`${axis.label} (${axis.letter})`)]);
       container.appendChild(el('div', { className: 'slice-axis' }, [
         el('div', { className: 'inline' }, [title, out]), slider,
@@ -656,7 +968,7 @@
   function replaceMeshSpec(spec) {
     const old = meshes.get(spec.id);
     if (!old) return;
-    renderer.removeActor(old.actor);
+    removeMeshActors(old);
     meshes.set(spec.id, buildMesh(spec, old));
   }
   // Removing a dataset also removes its isosurface; an isosurface alone only exists in the page.
@@ -664,9 +976,9 @@
     const ids = isIsoId(id) ? [id] : [id, isoId(id)];
     for (const key of ids) {
       const mesh = meshes.get(key);
-      if (mesh) renderer.removeActor(mesh.actor);
+      if (mesh) removeMeshActors(mesh);
       const volume = volumes.get(key);
-      if (volume) volume.slices.forEach(({ actor }) => renderer.removeActor(actor));
+      if (volume) removeVolumeActors(volume);
       meshes.delete(key);
       volumes.delete(key);
       for (let i = items.length - 1; i >= 0; i--) if (items[i].id === key) items.splice(i, 1);
@@ -735,7 +1047,25 @@
     }
     const hasScalars = !isMesh || Boolean(s.arrayKey);
     $('scalar-controls').hidden = !hasScalars;
-    $('cmap').value = s.cmap;
+    cmapPicker.set(s.cmap, s.cmapReverse);
+    $('cmap-reverse').checked = Boolean(s.cmapReverse);
+    const d = hasScalars ? discreteOf(obj) : null;
+    const discrete = Boolean(d && d.enabled);
+    document.querySelectorAll('#color-mode button').forEach((b) => {
+      b.classList.toggle('active', (b.dataset.mode === 'discrete') === discrete);
+    });
+    $('continuous-controls').hidden = discrete;
+    $('discrete-controls').hidden = !discrete;
+    if (discrete) {
+      classPicker.set(d.palette, false);
+      $('class-method').value = d.method;
+      $('class-count').value = d.count;
+      $('class-count').disabled = d.method === 'unique';
+      $('class-other').value = d.other;
+      $('class-other').className = d.otherHidden ? 'checker' : '';
+      $('class-other-empty').classList.toggle('on', Boolean(d.otherHidden));
+      renderClassList(obj, d);
+    }
     if (hasScalars) {
       const [lo, hi] = isMesh ? meshRange(obj) : s.range;
       $('range-min').value = +lo.toPrecision(6);
@@ -749,10 +1079,192 @@
     $(`${id}-out`).textContent = fmt(+value);
   }
 
-  function renderCmapOptions() {
-    const select = $('cmap');
-    select.replaceChildren();
-    for (const name of Object.keys(SCENE.colormaps)) select.appendChild(el('option', { value: name, textContent: name }));
+  // ---------- Colormap picker (previews, groups as sub-menus) ----------
+  const swatch = (name, reverse) => el('span', { className: 'swatch', style: `background: ${cssGradient(name, reverse)}` });
+  function createPicker(container, onSelect, order) {
+    const button = el('button', { type: 'button', className: 'cmap-button' });
+    const menu = el('div', { className: 'cmap-menu', hidden: true });
+    container.replaceChildren(button, menu);
+    let current = null;
+    const close = () => { menu.hidden = true; };
+    function option(name) {
+      const { n } = cmapInfo(name);
+      const node = el('div', { className: `cmap-option${name === current ? ' current' : ''}`, title: name }, [
+        el('span', { className: 'name', textContent: name }), swatch(name, false),
+        el('span', { className: 'count', textContent: n ? String(n) : '' }),
+      ]);
+      node.addEventListener('click', () => { close(); onSelect(name); });
+      return node;
+    }
+    function build() {
+      const groups = {};
+      for (const name of Object.keys(SCENE.colormaps)) (groups[cmapInfo(name).group] = groups[cmapInfo(name).group] || []).push(name);
+      const names = [...order, ...Object.keys(groups).filter((g) => !order.includes(g))];
+      menu.replaceChildren();
+      names.forEach((group, i) => {
+        if (!groups[group]) return;
+        const options = groups[group].map(option);
+        if (i === 0) menu.append(el('div', { className: 'cmap-group', textContent: group }), ...options);
+        else menu.append(el('details', { open: groups[group].includes(current) }, [
+          el('summary', { textContent: `${group} (${groups[group].length})` }), ...options,
+        ]));
+      });
+    }
+    button.addEventListener('click', () => {
+      if (!menu.hidden) { close(); return; }
+      build();
+      menu.hidden = false;
+      const node = menu.querySelector('.cmap-option.current');
+      if (node) node.scrollIntoView({ block: 'nearest' });
+    });
+    document.addEventListener('pointerdown', (e) => { if (!container.contains(e.target)) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    return {
+      set(name, reverse) {
+        current = name;
+        button.replaceChildren(el('span', { className: 'name', textContent: name }), swatch(name, reverse));
+      },
+    };
+  }
+
+  // ---------- Discrete classes ----------
+  function discreteOf(obj) {
+    if (obj.kind === 'volume') return obj.state.discrete || (obj.state.discrete = newDiscrete());
+    const key = obj.state.arrayKey;
+    if (!key) return null;
+    return obj.discrete[key] || (obj.discrete[key] = newDiscrete());
+  }
+  const dataRangeOf = (obj) => (obj.kind === 'volume' ? obj.fullRange : obj.arrays[obj.state.arrayKey].range);
+
+  // Values of the colored array (magnitude for vectors).
+  function arrayValues(obj) {
+    if (obj.kind === 'volume') return obj.image.getPointData().getScalars().getData();
+    const arr = obj.arrays[obj.state.arrayKey];
+    const data = (arr.location === 'point' ? obj.polydata.getPointData() : obj.polydata.getCellData())
+      .getArrayByName(arr.name).getData();
+    if (arr.components === 1) return data;
+    const n = data.length / arr.components;
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      for (let k = 0; k < arr.components; k++) sum += data[i * arr.components + k] ** 2;
+      out[i] = Math.sqrt(sum);
+    }
+    return out;
+  }
+  function uniqueValues(values, max) {
+    const set = new Set();
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (!Number.isFinite(v) || set.has(v)) continue;
+      set.add(v);
+      if (set.size > max) return null;
+    }
+    return [...set].sort((a, b) => a - b);
+  }
+  function quantileEdges(values, n) {
+    const stride = Math.max(1, Math.floor(values.length / 200000));
+    const sample = [];
+    for (let i = 0; i < values.length; i += stride) if (Number.isFinite(values[i])) sample.push(values[i]);
+    sample.sort((a, b) => a - b);
+    if (!sample.length) return [0, 1];
+    const edges = [];
+    for (let i = 0; i <= n; i++) {
+      const v = sample[Math.min(sample.length - 1, Math.round(i / n * (sample.length - 1)))];
+      if (!edges.length || v > edges[edges.length - 1]) edges.push(v);
+    }
+    if (edges.length < 2) edges.push(edges[0] + 1);
+    return edges;
+  }
+  const recolorClasses = (d) => {
+    const colors = paletteColors(d.palette, d.classes.length);
+    d.classes.forEach((c, i) => { c.color = colors[i]; });
+  };
+
+  // Fills d.classes from d.method / d.count. Returns an error message or ''.
+  function generateClasses(obj, d) {
+    const values = arrayValues(obj);
+    if (d.method === 'unique') {
+      const unique = uniqueValues(values, 256);
+      if (!unique) return 'More than 256 distinct values: use intervals or quantiles.';
+      d.classes = unique.map((v) => ({ lo: v, hi: v }));
+    } else {
+      const n = clamp(Math.round(d.count) || 5, 1, 64);
+      let edges;
+      if (d.method === 'equal') {
+        const [lo, hi] = obj.kind === 'mesh' ? meshRange(obj) : obj.state.range;
+        edges = Array.from({ length: n + 1 }, (_, i) => lo + (hi - lo) * i / n);
+      } else {
+        edges = quantileEdges(values, n);
+      }
+      d.classes = edges.slice(0, -1).map((lo, i) => ({ lo, hi: edges[i + 1] }));
+    }
+    recolorClasses(d);
+    return '';
+  }
+
+  // First switch to discrete: one class per value for label-like arrays, otherwise
+  // the current colormap discretized into 5 equal intervals.
+  function autoClasses(obj, d) {
+    const unique = uniqueValues(arrayValues(obj), 64);
+    if (unique) {
+      d.method = 'unique';
+      d.palette = unique.length <= 10 ? 'tab10' : unique.length <= 20 ? 'tab20' : obj.state.cmap;
+    } else {
+      d.method = 'equal';
+      d.count = 5;
+      d.palette = obj.state.cmap;
+    }
+    return generateClasses(obj, d);
+  }
+
+  function setClassStatus(message, isError) {
+    $('class-status').className = isError ? 'error' : 'muted';
+    $('class-status').textContent = message;
+  }
+
+  // Row edits only re-apply the colors (no panel rebuild: keeps the color dialog open).
+  function applyObject(obj) {
+    if (obj.kind === 'mesh') applyMesh(obj);
+    else applyVolume(obj);
+    updateLegend();
+    render();
+  }
+
+  function renderClassList(obj, d) {
+    const list = $('class-list');
+    list.replaceChildren();
+    d.classes.forEach((c, i) => {
+      const color = el('input', { type: 'color', value: c.color, title: 'Class color', className: c.hidden ? 'checker' : '' });
+      color.addEventListener('input', () => { c.hidden = false; color.className = ''; empty.classList.remove('on'); c.color = color.value; applyObject(obj); });
+      const empty = el('button', {
+        type: 'button', className: `empty-toggle${c.hidden ? ' on' : ''}`, textContent: '∅',
+        title: 'Empty: hide the values of this class',
+      });
+      empty.addEventListener('click', () => {
+        c.hidden = !c.hidden;
+        empty.classList.toggle('on', c.hidden);
+        color.className = c.hidden ? 'checker' : '';
+        applyObject(obj);
+      });
+      const number = (key) => {
+        const input = el('input', { type: 'number', step: 'any', value: +c[key].toPrecision(6) });
+        input.addEventListener('change', () => {
+          if (input.value === '' || !isFinite(+input.value)) { input.value = +c[key].toPrecision(6); return; }
+          c[key] = +input.value;
+          applyObject(obj);
+        });
+        return input;
+      };
+      const remove = el('button', { type: 'button', className: 'remove', textContent: '×', title: 'Remove class' });
+      remove.addEventListener('click', () => updateSelected(() => { d.classes.splice(i, 1); }));
+      list.appendChild(el('div', { className: 'class-row' }, [color, empty, number('lo'), number('hi'), remove]));
+    });
+    if (!d.classes.length) list.appendChild(el('p', { className: 'muted', textContent: 'No class: every value uses the "other" color.' }));
+  }
+
+  function classLabel(c) {
+    return c.lo === c.hi ? fmt(c.lo) : `${fmt(Math.min(c.lo, c.hi))} – ${fmt(Math.max(c.lo, c.hi))}`;
   }
 
   function updateLegend() {
@@ -771,12 +1283,26 @@
       title = `${obj.name} — intensity`;
     }
     $('legend-title').textContent = title;
+    const d = discreteOf(obj);
+    const discrete = Boolean(d && d.enabled);
+    $('legend-continuous').hidden = discrete;
+    $('legend-classes').hidden = !discrete;
+    if (discrete) {
+      const MAX = 40;
+      const rows = d.classes.slice(0, MAX).flatMap((c) => [
+        c.hidden ? el('i', { className: 'checker', title: 'Empty (hidden)' }) : el('i', { style: `background: ${c.color}` }),
+        el('span', { textContent: classLabel(c) + (c.hidden ? ' (empty)' : ''), className: c.hidden ? 'muted' : '' }),
+      ]);
+      if (d.classes.length > MAX) rows.push(el('span'), el('span', { className: 'muted', textContent: `… ${d.classes.length - MAX} more` }));
+      $('legend-classes').replaceChildren(...rows);
+      return;
+    }
     $('legend-min').textContent = fmt(lo);
     $('legend-max').textContent = fmt(hi);
     const canvas = $('legend-bar');
     const ctx = canvas.getContext('2d');
     const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
-    for (const [x, r, g, b] of colormap(obj.state.cmap)) grad.addColorStop(clamp(x, 0, 1), `rgb(${r * 255},${g * 255},${b * 255})`);
+    for (const [x, r, g, b] of cmapPoints(obj.state.cmap, obj.state.cmapReverse)) grad.addColorStop(clamp(x, 0, 1), `rgb(${r * 255},${g * 255},${b * 255})`);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
@@ -826,6 +1352,414 @@
     render();
   }
 
+  // ---------- RAS axes (2D overlay, draggable, drawn into the captures) ----------
+  // Position: fraction of the free space of the view (0 = left/top, 1 = right/bottom).
+  const rasAxes = { visible: Boolean(SCENE.showRasAxes), fx: 0, fy: 1, size: 120, ...(SCENE.rasAxes || {}) };
+  const layout = { mode: 'single', objects2d: true, slab2d: 4, ...(SCENE.layout || {}) };
+  const RAS_MARGIN = 12;
+  const R = neg(L);
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const normalize = (v) => { const n = Math.hypot(...v) || 1; return v.map((x) => x / n); };
+
+  function rasPosition() {
+    const view = $('view');
+    const free = (extent) => Math.max(0, extent - rasAxes.size - 2 * RAS_MARGIN);
+    return {
+      left: RAS_MARGIN + clamp(rasAxes.fx, 0, 1) * free(view.clientWidth),
+      top: RAS_MARGIN + clamp(rasAxes.fy, 0, 1) * free(view.clientHeight),
+    };
+  }
+
+  // Axes centered on (cx, cy), `size` px wide, oriented like the current camera.
+  function drawRasAxes(ctx, cx, cy, size) {
+    const camera = renderer.getActiveCamera();
+    const position = camera.getPosition(), focal = camera.getFocalPoint();
+    const forward = normalize([0, 1, 2].map((i) => focal[i] - position[i]));
+    const right = normalize(cross(forward, camera.getViewUp()));
+    const up = cross(right, forward);
+    const length = size * 0.33;
+    const axes = [['R', R, '#e05252'], ['A', A, '#3fae5a'], ['S', S, '#4a7be0']]
+      .map(([label, v, color]) => ({ label, color, x: dot(v, right), y: dot(v, up), z: dot(v, forward) }))
+      .sort((a, b) => b.z - a.z);  // farthest first
+    const outline = $('background').value;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `600 ${Math.round(size * 0.14)}px system-ui, sans-serif`;
+    for (const a of axes) {
+      const ex = cx + a.x * length, ey = cy - a.y * length;
+      const projected = Math.hypot(a.x, a.y);
+      ctx.globalAlpha = a.z > 0.2 ? 0.55 : 1;  // pointing away from the viewer
+      ctx.strokeStyle = ctx.fillStyle = a.color;
+      ctx.lineWidth = Math.max(2, size * 0.035);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      if (projected > 0.15) {  // arrow head
+        const ux = a.x / projected, uy = -a.y / projected, head = size * 0.08;
+        ctx.beginPath();
+        ctx.moveTo(ex + ux * head * 0.6, ey + uy * head * 0.6);
+        ctx.lineTo(ex - ux * head * 0.6 - uy * head * 0.5, ey - uy * head * 0.6 + ux * head * 0.5);
+        ctx.lineTo(ex - ux * head * 0.6 + uy * head * 0.5, ey - uy * head * 0.6 - ux * head * 0.5);
+        ctx.closePath();
+        ctx.fill();
+      }
+      const dir = projected > 1e-3 ? [a.x / projected, -a.y / projected] : [0.7, -0.7];
+      const lx = cx + a.x * length + dir[0] * size * 0.12, ly = cy - a.y * length + dir[1] * size * 0.12;
+      ctx.lineWidth = Math.max(2, size * 0.03);
+      ctx.strokeStyle = outline;
+      ctx.strokeText(a.label, lx, ly);
+      ctx.fillText(a.label, lx, ly);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#888';
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(2, size * 0.03), 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawRasOverlay() {
+    const canvas = $('ras-axes');
+    canvas.hidden = !rasAxes.visible;
+    if (!rasAxes.visible) return;
+    const size = rasAxes.size, dpr = window.devicePixelRatio || 1;
+    const { left, top } = rasPosition();
+    Object.assign(canvas.style, { left: `${left}px`, top: `${top}px`, width: `${size}px`, height: `${size}px` });
+    if (canvas.width !== Math.round(size * dpr)) canvas.width = canvas.height = Math.round(size * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+    drawRasAxes(ctx, size / 2, size / 2, size);
+  }
+
+  // ---------- 2D orthogonal views ("3 slices + 3D" layout) ----------
+  // Same render window, one renderer per viewport (vtk viewports: origin bottom-left).
+  // Radiological convention: patient right on the screen left (axial, coronal).
+  const { vtkRenderer } = vtk.Rendering.Core;
+  const VIEWPORT_3D = [0.5, 0, 1, 0.5];
+  const views2d = [
+    { axis: 2, name: 'Axial', forward: S, up: A, viewport: [0, 0.5, 0.5, 1] },
+    { axis: 0, name: 'Sagittal', forward: R, up: S, viewport: [0.5, 0.5, 1, 1] },
+    { axis: 1, name: 'Coronal', forward: neg(A), up: S, viewport: [0, 0, 0.5, 0.5] },
+  ].map((view) => {
+    const r = vtkRenderer.newInstance({ background: hexToRgb(SCENE.background) });
+    r.setViewport(...view.viewport);
+    r.getActiveCamera().setParallelProjection(true);
+    return { ...view, renderer: r };
+  });
+
+  function viewRect(view) {
+    const W = $('view').clientWidth, H = $('view').clientHeight;
+    const [x0, y0, x1, y1] = view.viewport;
+    return { x: x0 * W, y: (1 - y1) * H, width: (x1 - x0) * W, height: (y1 - y0) * H };
+  }
+  function viewBasis(view) {
+    const cam = view.renderer.getActiveCamera();
+    const fp = cam.getFocalPoint(), position = cam.getPosition();
+    const forward = normalize([0, 1, 2].map((i) => fp[i] - position[i]));
+    const right = normalize(cross(forward, cam.getViewUp()));
+    const up = cross(right, forward);
+    const rect = viewRect(view);
+    return { cam, fp, right, up, rect, k: (rect.height / 2) / cam.getParallelScale() };
+  }
+  function worldToView(basis, p) {
+    const d = [0, 1, 2].map((i) => p[i] - basis.fp[i]);
+    return [basis.rect.x + basis.rect.width / 2 + dot(d, basis.right) * basis.k,
+      basis.rect.y + basis.rect.height / 2 - dot(d, basis.up) * basis.k];
+  }
+  function viewToWorld(basis, x, y) {
+    const u = (x - basis.rect.x - basis.rect.width / 2) / basis.k;
+    const v = -(y - basis.rect.y - basis.rect.height / 2) / basis.k;
+    return [0, 1, 2].map((i) => basis.fp[i] + basis.right[i] * u + basis.up[i] * v);
+  }
+
+  // Fit the reference bounds in the view.
+  function reset2D(view) {
+    const b = refBounds();
+    const center = [0, 1, 2].map((i) => (b[2 * i] + b[2 * i + 1]) / 2);
+    const extent = [0, 1, 2].map((i) => b[2 * i + 1] - b[2 * i]);
+    const diag = Math.hypot(...extent) || 1;
+    const cam = view.renderer.getActiveCamera();
+    cam.setFocalPoint(...center);
+    cam.setPosition(...center.map((x, i) => x - view.forward[i] * diag * 2));
+    cam.setViewUp(...view.up);
+    const right = cross(view.forward, view.up);
+    const along = (v) => v.reduce((sum, c, i) => sum + Math.abs(c) * extent[i], 0);
+    const rect = viewRect(view);
+    const aspect = rect.height > 0 ? rect.width / rect.height : 1;
+    cam.setParallelScale(1.05 * Math.max(along(view.up) / 2, along(right) / 2 / aspect, 1e-3));
+    view.renderer.resetCameraClippingRange();
+  }
+
+  function applyLayout() {
+    const quad = layout.mode === 'quad';
+    for (const view of views2d) {
+      const has = renderWindow.getRenderers().includes(view.renderer);
+      if (quad && !has) renderWindow.addRenderer(view.renderer);
+      if (!quad && has) renderWindow.removeRenderer(view.renderer);
+    }
+    renderer.setViewport(...(quad ? VIEWPORT_3D : [0, 0, 1, 1]));
+    document.querySelectorAll('#layout-mode button').forEach((b) => b.classList.toggle('active', b.dataset.mode === layout.mode));
+    $('layout-options').hidden = !quad;
+    $('objects-2d').checked = layout.objects2d;
+    setSlider('slab-2d', layout.slab2d);
+    for (const mesh of meshes.values()) applyMesh(mesh);
+    if (quad) views2d.forEach(reset2D);
+    applySlicing();
+    drawRasOverlay();
+  }
+
+  function sliceStep(axis) {
+    const ref = refObject();
+    const b = refBounds();
+    return ref && ref.kind === 'volume' ? ref.spacing[axis] : Math.max((b[2 * axis + 1] - b[2 * axis]) / 200, 1e-3);
+  }
+  // Clamp to the reference bounds (and snap to the voxel grid of a volume reference).
+  function setSlicePos(axis, value) {
+    const ref = refObject();
+    const b = refBounds();
+    if (ref && ref.kind === 'volume') {
+      value = ref.origin[axis] + Math.round((value - ref.origin[axis]) / ref.spacing[axis]) * ref.spacing[axis];
+    }
+    slicing.pos[axis] = clamp(value, b[2 * axis], b[2 * axis + 1]);
+  }
+  function moveCursor(view, x, y) {
+    const p = viewToWorld(viewBasis(view), x, y);
+    [0, 1, 2].filter((i) => i !== view.axis).forEach((i) => setSlicePos(i, p[i]));
+    syncSliceInputs();
+    applySlicing();
+  }
+  function zoom2D(view, factor) {
+    const cam = view.renderer.getActiveCamera();
+    cam.setParallelScale(cam.getParallelScale() * factor);
+    drawViewOverlay();
+    render();
+  }
+  function pan2D(view, dx, dy) {
+    const basis = viewBasis(view);
+    const d = [0, 1, 2].map((i) => (-basis.right[i] * dx + basis.up[i] * dy) / basis.k);
+    const { cam } = basis;
+    cam.setFocalPoint(...cam.getFocalPoint().map((x, i) => x + d[i]));
+    cam.setPosition(...cam.getPosition().map((x, i) => x + d[i]));
+    view.renderer.resetCameraClippingRange();
+    drawViewOverlay();
+    render();
+  }
+
+  function anatomicalLetter(v) {
+    let best = '', bestDot = 0;
+    for (const [pos, negLetter, dir] of [['L', 'R', L], ['A', 'P', A], ['S', 'I', S]]) {
+      const d = dot(v, dir);
+      if (Math.abs(d) > Math.abs(bestDot)) { bestDot = d; best = d > 0 ? pos : negLetter; }
+    }
+    return best;
+  }
+
+  // Cross, title and orientation letters of the 2D views, in CSS px of the view.
+  function drawViews2d(ctx) {
+    // Text on a dark pill: readable over slices and any background.
+    const label = (text, x, y, color, align, baseline) => {
+      const w = ctx.measureText(text).width + 10, h = 18;
+      const left = align === 'left' ? x : align === 'right' ? x - w : x - w / 2;
+      const top = baseline === 'top' ? y : baseline === 'bottom' ? y - h : y - h / 2;
+      ctx.fillStyle = 'rgba(18, 21, 27, 0.65)';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(left, top, w, h, 4);
+      else ctx.rect(left, top, w, h);
+      ctx.fill();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = color;
+      ctx.fillText(text, left + w / 2, top + h / 2 + 0.5);
+    };
+    for (const view of views2d) {
+      const basis = viewBasis(view);
+      const { rect } = basis;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.width, rect.height);
+      ctx.clip();
+      ctx.lineWidth = 1;
+      ctx.setLineDash([6, 4]);
+      for (const j of [0, 1, 2].filter((i) => i !== view.axis)) {
+        const p = basis.fp.slice();
+        p[j] = slicing.pos[j];
+        const [x, y] = worldToView(basis, p);
+        ctx.strokeStyle = AXES[j].color;
+        ctx.beginPath();
+        if (Math.abs(basis.right[j]) > Math.abs(basis.up[j])) { ctx.moveTo(x, rect.y); ctx.lineTo(x, rect.y + rect.height); }
+        else { ctx.moveTo(rect.x, y); ctx.lineTo(rect.x + rect.width, y); }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.font = '600 12px system-ui, sans-serif';
+      const axis = AXES[view.axis];
+      label(`${view.name} · ${axis.letter} = ${fmt(slicing.pos[view.axis])} mm`, rect.x + 6, rect.y + 6, axis.color, 'left', 'top');
+      ctx.font = '600 13px system-ui, sans-serif';
+      const muted = '#e6e9ef';
+      const cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
+      label(anatomicalLetter(basis.up), cx, rect.y + 8, muted, 'center', 'top');
+      label(anatomicalLetter(neg(basis.up)), cx, rect.y + rect.height - 8, muted, 'center', 'bottom');
+      label(anatomicalLetter(neg(basis.right)), rect.x + 8, cy, muted, 'left', 'middle');
+      label(anatomicalLetter(basis.right), rect.x + rect.width - 8, cy, muted, 'right', 'middle');
+      ctx.restore();
+    }
+    const W = $('view').clientWidth, H = $('view').clientHeight;
+    ctx.save();
+    ctx.strokeStyle = '#7f8796';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H);
+    ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawViewOverlay() {
+    const canvas = $('view-overlay');
+    const quad = layout.mode === 'quad';
+    canvas.hidden = !quad;
+    if (!quad) return;
+    const W = $('view').clientWidth, H = $('view').clientHeight, dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    drawViews2d(ctx);
+  }
+
+  // Mouse on the 2D views, handled before the vtk.js interactor (capture phase on <main>).
+  (function setup2DInteraction() {
+    const main = document.querySelector('main');
+    const hitView = (e) => {
+      if (layout.mode !== 'quad' || !e.target.closest || !e.target.closest('#view')) return null;
+      const box = $('view').getBoundingClientRect();
+      const x = e.clientX - box.left, y = e.clientY - box.top;
+      const view = views2d.find((v) => {
+        const r = viewRect(v);
+        return x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
+      });
+      return view ? { view, x, y } : null;
+    };
+    let wheelAccum = 0;
+    main.addEventListener('wheel', (e) => {
+      const hit = hitView(e);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      let delta = e.deltaY || e.deltaX;  // Shift+wheel scrolls horizontally on some systems
+      if (e.deltaMode === 1) delta *= 33;
+      if (e.ctrlKey || e.metaKey) { zoom2D(hit.view, delta > 0 ? 1.1 : 1 / 1.1); return; }
+      wheelAccum += delta;
+      if (Math.abs(wheelAccum) < 40) return;  // trackpads: small deltas
+      const steps = (wheelAccum < 0 ? 1 : -1) * (e.shiftKey ? 5 : 1);
+      wheelAccum = 0;
+      const axis = hit.view.axis;
+      setSlicePos(axis, slicing.pos[axis] + steps * sliceStep(axis));
+      syncSliceInputs();
+      applySlicing();
+    }, { capture: true, passive: false });
+
+    let drag = null;
+    main.addEventListener('pointerdown', (e) => {
+      const hit = hitView(e);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const mode = e.button === 2 ? 'zoom' : (e.button === 1 || (e.button === 0 && e.shiftKey)) ? 'pan' : e.button === 0 ? 'cursor' : null;
+      if (!mode) return;
+      drag = { ...hit, mode };
+      main.setPointerCapture(e.pointerId);
+      if (mode === 'cursor') moveCursor(hit.view, hit.x, hit.y);
+    }, true);
+    main.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      e.stopPropagation();
+      const box = $('view').getBoundingClientRect();
+      const x = e.clientX - box.left, y = e.clientY - box.top;
+      if (drag.mode === 'cursor') moveCursor(drag.view, x, y);
+      else if (drag.mode === 'pan') pan2D(drag.view, x - drag.x, y - drag.y);
+      else zoom2D(drag.view, Math.exp((y - drag.y) * 0.01));
+      drag.x = x;
+      drag.y = y;
+    }, true);
+    const stop = (e) => {
+      if (!drag) return;
+      e.stopPropagation();
+      drag = null;
+      if (main.hasPointerCapture(e.pointerId)) main.releasePointerCapture(e.pointerId);
+    };
+    main.addEventListener('pointerup', stop, true);
+    main.addEventListener('pointercancel', stop, true);
+    main.addEventListener('contextmenu', (e) => { if (hitView(e)) e.preventDefault(); }, true);
+    main.addEventListener('dblclick', (e) => {
+      const hit = hitView(e);
+      if (!hit) return;
+      e.stopPropagation();
+      reset2D(hit.view);
+      drawViewOverlay();
+      render();
+    }, true);
+  })();
+  window.addEventListener('resize', () => requestAnimationFrame(drawViewOverlay));
+
+  // Overlays of the view drawn onto a capture (ctx covers the whole view, `scale` px per CSS px).
+  function drawOverlays(ctx, scale) {
+    if (layout.mode === 'quad') {
+      ctx.save();
+      ctx.scale(scale, scale);
+      drawViews2d(ctx);
+      ctx.restore();
+    }
+    if (!rasAxes.visible) return;
+    const { left, top } = rasPosition();
+    drawRasAxes(ctx, (left + rasAxes.size / 2) * scale, (top + rasAxes.size / 2) * scale, rasAxes.size * scale);
+  }
+
+  (function setupRasDrag() {
+    const canvas = $('ras-axes');
+    let start = null;
+    canvas.addEventListener('pointerdown', (e) => {
+      const { left, top } = rasPosition();
+      start = { x: e.clientX - left, y: e.clientY - top };
+      canvas.setPointerCapture(e.pointerId);
+      canvas.classList.add('dragging');
+      e.preventDefault();
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      const view = $('view');
+      const freeX = view.clientWidth - rasAxes.size - 2 * RAS_MARGIN;
+      const freeY = view.clientHeight - rasAxes.size - 2 * RAS_MARGIN;
+      rasAxes.fx = freeX > 0 ? clamp((e.clientX - start.x - RAS_MARGIN) / freeX, 0, 1) : 0;
+      rasAxes.fy = freeY > 0 ? clamp((e.clientY - start.y - RAS_MARGIN) / freeY, 0, 1) : 0;
+      drawRasOverlay();
+    });
+    const stop = () => { start = null; canvas.classList.remove('dragging'); };
+    canvas.addEventListener('pointerup', stop);
+    canvas.addEventListener('pointercancel', stop);
+  })();
+  renderer.getActiveCamera().onModified(drawRasOverlay);
+  window.addEventListener('resize', drawRasOverlay);
+
+  // Render window capture with the overlays, as a PNG data URL.
+  async function captureWithOverlays() {
+    const img = await loadImage(await renderWindow.captureImages()[0]);
+    const canvas = el('canvas', { width: img.width, height: img.height });
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    drawOverlays(ctx, img.width / $('view').clientWidth);
+    return canvas.toDataURL('image/png');
+  }
+
   // ---------- Rotation GIF (encoded in the browser with gifenc) ----------
   async function recordGif() {
     const button = $('gif-record');
@@ -851,6 +1785,7 @@
           ctx = canvas.getContext('2d', { willReadFrequently: true });
         }
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        drawOverlays(ctx, canvas.width / $('view').clientWidth);
         const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const palette = quantize(data, 256);
         gif.writeFrame(applyPalette(data, palette), canvas.width, canvas.height,
@@ -875,6 +1810,103 @@
     }
   }
 
+  // ---------- Standalone HTML export (current state, built in the browser) ----------
+  function meshData(polydata) {
+    const data = { points: encode(asType(polydata.getPoints().getData(), Float32Array)) };
+    for (const [key, getter] of Object.entries(CELL_KINDS)) {
+      const cells = polydata[getter]().getData();
+      data[key] = cells && cells.length ? encode(asType(cells, Uint32Array)) : null;
+    }
+    const normals = polydata.getPointData().getNormals();
+    if (normals) data.normals = encode(asType(normals.getData(), Float32Array));
+    data.arrays = [];
+    return data;
+  }
+
+  function exportScene() {
+    const camera = renderer.getActiveCamera();
+    const layers = [...meshes.values()].map((m) => ({
+      ...m.spec,
+      ...(m.spec.points ? {} : meshData(m.polydata)),  // isosurfaces only exist in the page
+      activeArray: m.state.arrayKey, clim: m.state.arrayKey ? meshRange(m).slice() : null,
+      ranges: m.ranges, discrete: m.discrete, cmap: m.state.cmap, cmapReverse: m.state.cmapReverse,
+      color: m.state.color, opacity: m.state.opacity,
+      lineWidth: m.state.lineWidth, pointSize: m.state.pointSize,
+      representation: m.state.representation, visible: m.state.visible,
+    }));
+    const vols = [...volumes.values()].map((v) => ({ ...v.spec, visible: v.state.visible, state: v.state }));
+    return {
+      background: $('background').value, coordSystem: SCENE.coordSystem,
+      layers, volumes: vols, colormaps: SCENE.colormaps, cmapInfo: SCENE.cmapInfo, server: false,
+      items, selected, slicing, rasAxes, layout,
+      camera: {
+        position: camera.getPosition(), focalPoint: camera.getFocalPoint(), viewUp: camera.getViewUp(),
+        viewAngle: camera.getViewAngle(), parallelScale: camera.getParallelScale(),
+      },
+    };
+  }
+
+  // JSON.stringify(value) as a list of pieces (one per string, e.g. each base64 array).
+  // "</" escaped: the JSON is embedded in a <script> tag.
+  function jsonParts(value, parts) {
+    if (ArrayBuffer.isView(value)) value = Array.from(value);
+    if (typeof value === 'string') {
+      const text = JSON.stringify(value);
+      parts.push(text.includes('</') ? text.replace(/<\//g, '<\\/') : text);
+    } else if (Array.isArray(value)) {
+      if (value.every((x) => typeof x === 'number')) { parts.push(JSON.stringify(value)); return; }
+      parts.push('[');
+      value.forEach((x, i) => {
+        if (i) parts.push(',');
+        if (x === undefined || typeof x === 'function') parts.push('null');
+        else jsonParts(x, parts);
+      });
+      parts.push(']');
+    } else if (value !== null && typeof value === 'object') {
+      parts.push('{');
+      let first = true;
+      for (const [key, x] of Object.entries(value)) {
+        if (x === undefined || typeof x === 'function') continue;
+        parts.push(`${first ? '' : ','}${JSON.stringify(key).replace(/<\//g, '<\\/')}:`);
+        first = false;
+        jsonParts(x, parts);
+      }
+      parts.push('}');
+    } else {
+      parts.push(JSON.stringify(value) ?? 'null');
+    }
+  }
+
+  async function exportHtml() {
+    const button = $('export-html');
+    const status = $('export-status');
+    button.disabled = true;
+    status.className = 'muted';
+    showLoading('Building the HTML page…');
+    await nextFrame();
+    try {
+      // Never one big string: browsers cap string length (Firefox: "allocation size overflow").
+      const page = PRISTINE.cloneNode(true);
+      const marker = '@@SCENE' + '@@';  // not written literally: the page source must not contain it
+      page.querySelector('#scene').textContent = marker;
+      const [head, tail] = page.outerHTML.split(marker);
+      const parts = ['<!DOCTYPE html>\n', head];
+      jsonParts(exportScene(), parts);
+      parts.push(tail);
+      const blob = new Blob(parts, { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      download(url, `${document.title || 'tractviewer'}.html`);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      status.textContent = `HTML page ready (${(blob.size / 1e6).toFixed(1)} MB).`;
+    } catch (err) {
+      status.className = 'error';
+      status.textContent = `Export error: ${err.message}`;
+    } finally {
+      button.disabled = false;
+      hideLoading();
+    }
+  }
+
   // ---------- Upload (server mode) ----------
   async function uploadFiles(files) {
     const status = $('status');
@@ -895,7 +1927,7 @@
         $('loading-text').textContent = `Building ${file.name}${counter}…`;
         await nextFrame();
         Object.assign(SCENE.colormaps, result.colormaps);
-        renderCmapOptions();
+        Object.assign(SCENE.cmapInfo, result.cmapInfo || {});
         result.volumes.forEach(addVolumeSpec);
         result.layers.forEach(addMeshSpec);
         result.updated.forEach(replaceMeshSpec);
@@ -930,7 +1962,13 @@
   }
 
   // ---------- Static controls ----------
-  renderCmapOptions();
+  const cmapPicker = createPicker($('cmap'), (name) => updateSelected((o) => { o.state.cmap = name; }),
+    ['Standard', 'Extras', 'Categorical', 'Custom']);
+  const classPicker = createPicker($('class-palette'), (name) => updateSelected((o) => {
+    const d = discreteOf(o);
+    d.palette = name;
+    recolorClasses(d);
+  }), ['Categorical', 'Standard', 'Extras', 'Custom']);
   for (const [label, dir, up] of VIEWS) {
     const button = el('button', { type: 'button', textContent: label });
     button.addEventListener('click', () => setView(dir, up));
@@ -938,7 +1976,57 @@
   }
 
   $('array').addEventListener('change', (e) => updateSelected((o) => { o.state.arrayKey = e.target.value || null; }));
-  $('cmap').addEventListener('change', (e) => updateSelected((o) => { o.state.cmap = e.target.value; }));
+  $('cmap-reverse').addEventListener('change', (e) => updateSelected((o) => { o.state.cmapReverse = e.target.checked; }));
+  document.querySelectorAll('#color-mode button').forEach((button) => button.addEventListener('click', () => {
+    setClassStatus('');
+    updateSelected((o) => {
+      const d = discreteOf(o);
+      d.enabled = button.dataset.mode === 'discrete';
+      if (d.enabled && !d.classes.length) {
+        const error = autoClasses(o, d);
+        setClassStatus(error || `${d.classes.length} classes (${d.method === 'unique' ? 'one per value' : 'equal intervals'}).`, Boolean(error));
+      }
+    });
+  }));
+  $('class-method').addEventListener('change', (e) => updateSelected((o) => { discreteOf(o).method = e.target.value; }));
+  $('class-count').addEventListener('change', (e) => updateSelected((o) => {
+    discreteOf(o).count = clamp(Math.round(+e.target.value) || 5, 1, 64);
+  }));
+  $('class-generate').addEventListener('click', () => {
+    const obj = getItem(selected);
+    if (!obj) return;
+    const d = discreteOf(obj);
+    const previous = d.classes;
+    const error = generateClasses(obj, d);
+    if (error) d.classes = previous;
+    setClassStatus(error || `${d.classes.length} classes.`, Boolean(error));
+    updateSelected(() => {});
+  });
+  $('class-add').addEventListener('click', () => updateSelected((o) => {
+    const d = discreteOf(o);
+    const last = d.classes[d.classes.length - 1];
+    const [lo, hi] = last ? [last.hi, last.hi + (Math.abs(last.hi - last.lo) || 1)] : dataRangeOf(o);
+    d.classes.push({ lo, hi, color: paletteColors(d.palette, d.classes.length + 1)[d.classes.length] });
+  }));
+  $('class-other').addEventListener('input', (e) => {
+    const obj = getItem(selected);
+    if (!obj) return;
+    const d = discreteOf(obj);
+    d.other = e.target.value;
+    d.otherHidden = false;
+    e.target.className = '';
+    $('class-other-empty').classList.remove('on');
+    applyObject(obj);
+  });
+  $('class-other-empty').addEventListener('click', () => {
+    const obj = getItem(selected);
+    if (!obj) return;
+    const d = discreteOf(obj);
+    d.otherHidden = !d.otherHidden;
+    $('class-other').className = d.otherHidden ? 'checker' : '';
+    $('class-other-empty').classList.toggle('on', d.otherHidden);
+    applyObject(obj);
+  });
   const currentRange = (o) => (o.kind === 'mesh' ? meshRange(o) : o.state.range);
   $('range-min').addEventListener('change', (e) => updateSelected((o) => { currentRange(o)[0] = +e.target.value; }));
   $('range-max').addEventListener('change', (e) => updateSelected((o) => { currentRange(o)[1] = +e.target.value; }));
@@ -972,22 +2060,75 @@
   });
 
   $('background').value = SCENE.background;
-  $('background').addEventListener('input', (e) => { renderer.setBackground(...hexToRgb(e.target.value)); render(); });
+  $('background').addEventListener('input', (e) => {
+    const rgb = hexToRgb(e.target.value);
+    [renderer, ...views2d.map((v) => v.renderer)].forEach((r) => r.setBackground(...rgb));
+    drawRasOverlay();
+    drawViewOverlay();
+    render();
+  });
+  document.querySelectorAll('#layout-mode button').forEach((button) => button.addEventListener('click', () => {
+    layout.mode = button.dataset.mode;
+    applyLayout();
+  }));
+  $('objects-2d').addEventListener('change', (e) => {
+    layout.objects2d = e.target.checked;
+    for (const mesh of meshes.values()) applyMesh(mesh);
+    render();
+  });
+  $('slab-2d').addEventListener('input', (e) => {
+    layout.slab2d = +e.target.value;
+    $('slab-2d-out').textContent = fmt(layout.slab2d);
+    applySlicing();
+  });
+  $('ras-toggle').checked = rasAxes.visible;
+  $('ras-options').hidden = !rasAxes.visible;
+  setSlider('ras-size', rasAxes.size);
+  $('ras-toggle').addEventListener('change', (e) => {
+    rasAxes.visible = e.target.checked;
+    $('ras-options').hidden = !rasAxes.visible;
+    drawRasOverlay();
+  });
+  $('ras-size').addEventListener('input', (e) => {
+    rasAxes.size = +e.target.value;
+    $('ras-size-out').textContent = fmt(rasAxes.size);
+    drawRasOverlay();
+  });
   $('reset').addEventListener('click', () => { renderer.resetCamera(); render(); });
   $('shot').addEventListener('click', () => {
-    renderWindow.captureImages()[0].then((url) => download(url, `${document.title || 'tractviewer'}.png`));
+    captureWithOverlays().then((url) => download(url, `${document.title || 'tractviewer'}.png`));
   });
   $('gif-record').addEventListener('click', recordGif);
+  $('export-html').addEventListener('click', exportHtml);
 
   // ---------- Initial scene ----------
   (async () => {
     await nextFrame();  // paint the loading overlay before decoding the data
     SCENE.volumes.forEach(addVolumeSpec);
     SCENE.layers.forEach(addMeshSpec);
-    selected = items.find((i) => i.kind === 'mesh') || items[0] || null;
-    ensureReference();
+    // Pages exported from the interface also carry the display order, selection, slices and camera.
+    const exists = (item) => item && (item.kind === 'mesh' ? meshes : volumes).has(item.id);
+    if (SCENE.items) items.splice(0, items.length, ...SCENE.items.filter(exists));
+    selected = (exists(SCENE.selected) && items.find((i) => i.kind === SCENE.selected.kind && i.id === SCENE.selected.id))
+      || items.find((i) => i.kind === 'mesh') || items[0] || null;
+    if (SCENE.slicing) Object.assign(slicing, SCENE.slicing);
+    if (!SCENE.slicing || (slicing.ref !== 'scene' && !refObject())) ensureReference();
     refreshAll();
-    setView(A, S);  // same orientation as the default screenshot()/record()
+    applyLayout();
+    if (SCENE.camera) {
+      const { position, focalPoint, viewUp, viewAngle, parallelScale } = SCENE.camera;
+      const camera = renderer.getActiveCamera();
+      camera.setPosition(...position);
+      camera.setFocalPoint(...focalPoint);
+      camera.setViewUp(...viewUp);
+      camera.setViewAngle(viewAngle);
+      camera.setParallelScale(parallelScale);
+      renderer.resetCameraClippingRange();
+      render();
+    } else {
+      setView(A, S);  // same orientation as the default screenshot()/record()
+    }
+    drawRasOverlay();
     hideLoading();
   })();
 })();

@@ -3,8 +3,9 @@
   GET    /                      vtk.js page (current scene embedded)
   POST   /api/upload            body = file content
                                 header: X-Filename (URI encoded)
-                                -> {layers, volumes, updated, colormaps}
+                                -> {layers, volumes, updated, colormaps, cmapInfo}
   DELETE /api/datasets/<name>   remove a dataset
+  GET    /vendor/<file>         local JS library (desktop mode only)
 
 Uploaded files go through TractViewer.add: same loading as the CLI, including
 the projection of tractograms onto the affine of the first NIfTI (reprojected
@@ -34,12 +35,15 @@ class WebApp:
     """Shared server state: viewer, lock, upload folder, export options."""
 
     def __init__(self, viewer, title: str = "TractViewer", max_streamlines: Optional[int] = None,
-                 max_voxels: int = vtkjs.DEFAULT_MAX_VOXELS, vtkjs_url: str = vtkjs.VTKJS_URL):
+                 max_voxels: int = vtkjs.DEFAULT_MAX_VOXELS, vtkjs_url: str = vtkjs.VTKJS_URL,
+                 gifenc_url: str = vtkjs.GIFENC_URL, vendor_dir: Optional[Path] = None):
         self.viewer = viewer
         self.title = title
         self.max_streamlines = max_streamlines
         self.max_voxels = max_voxels
         self.vtkjs_url = vtkjs_url
+        self.gifenc_url = gifenc_url
+        self.vendor_dir = vendor_dir  # local JS libraries served under /vendor/ (desktop mode)
         self.lock = threading.Lock()
         self.upload_dir = Path(tempfile.mkdtemp(prefix="tractviewer_upload_"))
         vtkjs.make_names_unique(viewer)
@@ -47,7 +51,8 @@ class WebApp:
     def page(self) -> bytes:
         with self.lock:
             scene = vtkjs.build_scene(self.viewer, self.max_streamlines, self.max_voxels, server=True)
-        return vtkjs.render_html(scene, title=self.title, vtkjs_url=self.vtkjs_url).encode("utf-8")
+        return vtkjs.render_html(scene, title=self.title, vtkjs_url=self.vtkjs_url,
+                                 gifenc_url=self.gifenc_url).encode("utf-8")
 
     def add_file(self, path: Path) -> dict:
         """Load an uploaded file. NIfTI files are loaded as volumes (slices); the page
@@ -74,11 +79,13 @@ class WebApp:
                         updated.append(other_layer)
             if layer is not None:
                 cmaps.update(layer.pop("_cmap_def", {}))
+        colormaps = vtkjs.sample_colormaps(cmaps)
         return {
             "layers": [layer] if layer is not None else [],
             "volumes": [volume] if volume is not None else [],
             "updated": updated,
-            "colormaps": vtkjs.sample_colormaps(cmaps),
+            "colormaps": colormaps,
+            "cmapInfo": vtkjs.cmap_info(colormaps),
         }
 
     def remove(self, name: str) -> None:
@@ -89,13 +96,22 @@ class WebApp:
         shutil.rmtree(self.upload_dir, ignore_errors=True)
 
 
-def make_server(app: WebApp, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
+def make_server(app: WebApp, host: str = "0.0.0.0", port: int = 8080) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
                 return
-            if self.path.split("?")[0] not in ("/", "/index.html"):
+            path = self.path.split("?")[0]
+            if path.startswith("/vendor/") and app.vendor_dir is not None:
+                name = Path(unquote(path[len("/vendor/"):])).name
+                file = app.vendor_dir / name
+                if name and file.is_file():
+                    self._send(200, file.read_bytes(), "text/javascript; charset=utf-8")
+                else:
+                    self.send_error(404)
+                return
+            if path not in ("/", "/index.html"):
                 self.send_error(404)
                 return
             self._send(200, app.page(), "text/html; charset=utf-8")
@@ -154,7 +170,7 @@ def make_server(app: WebApp, host: str = "127.0.0.1", port: int = 8080) -> Threa
     return ThreadingHTTPServer((host, port), Handler)
 
 
-def serve(viewer, host: str = "127.0.0.1", port: int = 8080, open_browser: bool = False,
+def serve(viewer, host: str = "0.0.0.0", port: int = 8080, open_browser: bool = False,
           title: str = "TractViewer", max_streamlines: Optional[int] = None,
           max_voxels: int = vtkjs.DEFAULT_MAX_VOXELS) -> None:
     """Serve the interface on http://host:port/ until Ctrl+C."""

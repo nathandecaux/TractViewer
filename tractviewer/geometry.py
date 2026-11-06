@@ -23,6 +23,19 @@ def rotate_points(points: np.ndarray, rx: float, ry: float, rz: float) -> np.nda
     return points
 
 
+def convert_coord_system(ds: pv.DataSet, source: str, target: str) -> None:
+    """Convert the points of a mesh between the RAS+ and LPS+ frames (in place) and tag field_data."""
+    source, target = source.upper(), target.upper()
+    for frame in (source, target):
+        if frame not in ("RAS", "LPS"):
+            raise ValueError(f"Unknown coordinate system '{frame}' (expected 'RAS' or 'LPS').")
+    if source != target:
+        points = ds.points.copy()
+        points[:, :2] *= -1.0  # R <-> L, A <-> P
+        ds.points = points
+    ds.field_data["coord_system"] = np.array([target], dtype=object)
+
+
 def rotate_camera(camera, azimuth_deg: float = 0.0, elevation_deg: float = 0.0) -> None:
     """Rotate the camera with VTK when available, else manually around the focal point."""
     if azimuth_deg:

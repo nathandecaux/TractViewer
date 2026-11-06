@@ -1,6 +1,7 @@
 """Command line interface.
 
     tractviewer web        [FILES...]            web interface (vtk.js): upload, slices, GIF
+    tractviewer desktop    [FILES...]            same interface in a native window (pywebview)
     tractviewer html       FILES... -o x.html    standalone vtk.js page
     tractviewer show       FILES...              desktop window (pyvista)
     tractviewer screenshot FILES... -o x.png     PNG capture
@@ -24,7 +25,7 @@ from tractviewer.core import TractViewer
 from tractviewer.loaders import stem
 from tractviewer.params import parse_spec
 
-COMMANDS = ("web", "html", "show", "screenshot", "record", "info")
+COMMANDS = ("web", "desktop", "html", "show", "screenshot", "record", "info")
 
 INPUT_HELP = (
     "Files to load, with optional parameters: path:key=val,key=val. "
@@ -67,12 +68,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("web", parents=[options], help="Web interface (vtk.js): upload, slices, GIF")
     sp.add_argument("inputs", nargs="*", help=INPUT_HELP + " Optional: files can be uploaded from the page.")
-    sp.add_argument("--host", default="127.0.0.1")
+    sp.add_argument("--host", default="0.0.0.0")
     sp.add_argument("--port", type=int, default=8080)
     sp.add_argument("--open", action="store_true", help="Open the browser")
     sp.add_argument("--title", default="TractViewer")
     sp.add_argument("--max-streamlines", type=int, help="Subsample large tractograms")
     sp.add_argument("--max-voxels", type=int, help="Decimate large volumes (default: 16e6)")
+
+    sp = sub.add_parser("desktop", parents=[options],
+                        help="Web interface in a native window (pywebview, no browser)")
+    sp.add_argument("inputs", nargs="*", help=INPUT_HELP + " Optional: files can be uploaded from the window.")
+    sp.add_argument("--title", default="TractViewer")
+    sp.add_argument("--max-streamlines", type=int, help="Subsample large tractograms")
+    sp.add_argument("--max-voxels", type=int, help="Decimate large volumes (default: 16e6)")
+    sp.add_argument("--debug", action="store_true", help="Enable the webview developer tools")
 
     sp = sub.add_parser("html", parents=[common], help="Standalone vtk.js HTML page")
     sp.add_argument("-o", "--output", type=Path, required=True, help=".html file")
@@ -118,12 +127,15 @@ def main(argv: Optional[List[str]] = None):
                       coord_system=args.coord, iso_value=args.iso)
     # Web pages show NIfTI files as slices; the isosurface is generated on demand in the page
     # (or in Python with the per-file parameter marching_cubes=true).
-    marching_cubes = not args.no_marching_cubes and cmd not in ("web", "html")
+    marching_cubes = not args.no_marching_cubes and cmd not in ("web", "desktop", "html")
     _add_inputs(vis, args.inputs, color=args.color, marching_cubes=marching_cubes, smooth=args.smooth)
 
     if cmd == "web":
         vis.serve(host=args.host, port=args.port, open_browser=args.open, title=args.title,
                   max_streamlines=args.max_streamlines, max_voxels=args.max_voxels)
+    elif cmd == "desktop":
+        vis.desktop(title=args.title, max_streamlines=args.max_streamlines,
+                    max_voxels=args.max_voxels, debug=args.debug)
     elif cmd == "html":
         out = vis.export_html(args.output, title=args.title, max_streamlines=args.max_streamlines,
                               max_voxels=args.max_voxels)
@@ -185,7 +197,7 @@ def build_legacy_parser() -> argparse.ArgumentParser:
     p.add_argument("--off-screen", action="store_true", help="Force off-screen rendering")
     p.add_argument("--interactive", action="store_true", help="Force the interactive window even with capture/rotation")
     p.add_argument("--web", action="store_true", help="Start the web interface (vtk.js)")
-    p.add_argument("--web-host", type=str, default="127.0.0.1", help="Web server host")
+    p.add_argument("--web-host", type=str, default="0.0.0.0", help="Web server host")
     p.add_argument("--web-port", type=int, default=8080, help="Web server port")
     p.add_argument("--open-browser", action="store_true", help="Open the browser on the web interface")
     p.add_argument("--screenshot", type=Path, help="PNG capture path after loading")
@@ -208,7 +220,7 @@ def legacy_main(argv: List[str]):
     parser = build_legacy_parser()
     args = parser.parse_args(argv)
     print("Deprecated: the 'tractviewer FILES --option' syntax. Use a subcommand: "
-          "tractviewer {web,html,show,screenshot,record,info} FILES ... (see 'tractviewer -h').",
+          "tractviewer {web,desktop,html,show,screenshot,record,info} FILES ... (see 'tractviewer -h').",
           file=sys.stderr)
 
     if args.off_screen and args.interactive:

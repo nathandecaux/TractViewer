@@ -33,11 +33,30 @@ VTKJS_URL = "https://cdn.jsdelivr.net/npm/vtk.js@37.1.1/vtk.js"
 # Browser-side GIF encoder (ES module, ~9 kB), loaded only when a GIF is recorded.
 GIFENC_URL = "https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js"
 
-# Colormaps always offered by the page (on top of the datasets' own).
-DEFAULT_CMAPS = [
-    "viridis", "plasma", "inferno", "magma", "cividis", "turbo", "jet", "gray",
-    "hot", "coolwarm", "RdBu_r", "Spectral", "tab10", "tab20",
-]
+# Colormaps always offered by the page (on top of the datasets' own), by menu group.
+CMAP_GROUPS = {
+    "Standard": [
+        "viridis", "plasma", "inferno", "magma", "cividis", "turbo", "jet", "gray",
+        "hot", "coolwarm", "RdBu_r", "Spectral",
+    ],
+    "Extras": [
+        # sequential
+        "Blues", "Greens", "Reds", "Oranges", "Purples", "Greys", "YlOrRd", "YlOrBr", "YlGnBu",
+        "YlGn", "BuPu", "GnBu", "PuRd", "OrRd", "PuBuGn", "bone", "copper", "pink", "afmhot",
+        "gist_heat", "cubehelix", "gnuplot", "gnuplot2", "CMRmap",
+        # diverging
+        "bwr", "seismic", "PiYG", "PRGn", "BrBG", "PuOr", "RdGy", "RdYlBu", "RdYlGn",
+        # cyclic / misc
+        "twilight", "twilight_shifted", "hsv", "rainbow", "nipy_spectral", "gist_rainbow",
+        "terrain", "ocean", "cool", "spring", "summer", "autumn", "winter", "Wistia",
+    ],
+    "Categorical": [
+        "tab10", "tab20", "tab20b", "tab20c", "Set1", "Set2", "Set3", "Paired",
+        "Dark2", "Accent", "Pastel1", "Pastel2",
+    ],
+}
+DEFAULT_CMAPS = [name for names in CMAP_GROUPS.values() for name in names]
+CUSTOM_GROUP = "Custom"
 CMAP_SAMPLES = 64
 DEFAULT_CMAP = "viridis"
 DEFAULT_MAX_VOXELS = 16_000_000
@@ -67,6 +86,8 @@ def build_scene(viewer, max_streamlines: Optional[int] = None,
         "layers": layers,
         "volumes": volumes,
         "colormaps": colormaps,
+        "cmapInfo": cmap_info(colormaps),
+        "showRasAxes": bool(getattr(viewer, "show_ras_axes", False)),
         "server": server,
     }
 
@@ -117,6 +138,19 @@ def sample_colormaps(extra: Optional[Dict[str, object]] = None) -> Dict[str, lis
     return out
 
 
+def cmap_info(colormaps: Dict[str, list]) -> Dict[str, dict]:
+    """{name: {group, n}} for the page menus. `n` = number of colors of a categorical
+    colormap (sharp steps, see _sample_cmap), 0 for a continuous one."""
+    groups = {name: group for group, names in CMAP_GROUPS.items() for name in names}
+    info = {}
+    for name, samples in colormaps.items():
+        steps = len(samples) // 2
+        categorical = len(samples) % 2 == 0 and steps <= 32 and all(
+            samples[2 * i][1:] == samples[2 * i + 1][1:] for i in range(steps))
+        info[name] = {"group": groups.get(name, CUSTOM_GROUP), "n": steps if categorical else 0}
+    return info
+
+
 def unique_name(viewer, base: str) -> str:
     names = set(viewer.names())
     if base not in names:
@@ -141,14 +175,15 @@ def make_names_unique(viewer) -> None:
         seen.add(name)
 
 
-def render_html(scene_dict: dict, title: str = "TractViewer", vtkjs_url: str = VTKJS_URL) -> str:
+def render_html(scene_dict: dict, title: str = "TractViewer", vtkjs_url: str = VTKJS_URL,
+                gifenc_url: str = GIFENC_URL) -> str:
     template = resources.files("tractviewer.web").joinpath("vtkjs_template.html").read_text("utf-8")
     # "</" escaped: the JSON is embedded in a <script> tag.
     scene_json = json.dumps(scene_dict, separators=(",", ":")).replace("</", "<\\/")
     return (template
             .replace("__TITLE__", _html_escape(title))
             .replace("__VTKJS_URL__", vtkjs_url)
-            .replace("__GIFENC_URL__", GIFENC_URL)
+            .replace("__GIFENC_URL__", gifenc_url)
             .replace("__SCENE_JSON__", scene_json))
 
 
@@ -373,9 +408,9 @@ def _sample_cmap(cmap) -> List[List[float]]:
             lo, hi = i / cm.N, (i + 1) / cm.N
             points.append([lo, r, g, b])
             points.append([hi - 1e-6 if i < cm.N - 1 else hi, r, g, b])
-        return [[round(v, 6) for v in p] for p in points]
+        return [[round(v, 6) if i == 0 else round(v, 4) for i, v in enumerate(p)] for p in points]
     xs = np.linspace(0.0, 1.0, CMAP_SAMPLES)
-    return [[round(float(x), 6), *(round(float(c), 6) for c in cm(x)[:3])] for x in xs]
+    return [[round(float(x), 6), *(round(float(c), 4) for c in cm(x)[:3])] for x in xs]
 
 
 def _to_hex(color, default: str) -> str:

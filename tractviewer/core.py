@@ -62,6 +62,8 @@ class TractViewer(LegacyMethodsMixin):
       - name: internal name (automatic otherwise)
       - legend : str   scalar bar title
     Loading parameters (add only):
+      - coord_system: 'RAS' | 'LPS'  frame of a mesh/tractogram file, converted to the
+        frame of the viewer (ignored for NIfTI files, placed through their affine)
       - marching_cubes: bool (NIfTI, default True)
       - smooth: int smoothing iterations (NIfTI, default 200)
       - iso: float iso value (NIfTI, default: the viewer's iso_value)
@@ -119,10 +121,15 @@ class TractViewer(LegacyMethodsMixin):
         marching_cubes = params.pop("marching_cubes", True)
         smooth_iterations = int(params.pop("smooth", 200))
         iso = params.pop("iso", None)
+        source_coord_system = params.pop("coord_system", None)
         ds = loaders.load(
             data, marching_cubes=marching_cubes, smooth_iterations=smooth_iterations,
             iso_value=self.iso_value if iso is None else iso, coord_system=self.coord_system,
         )
+        # Meshes (.vtk, ...) carry no frame: coord_system declares it, the points are
+        # converted to the frame of the viewer. NIfTI files are placed through their affine.
+        if source_coord_system and "nifti_affine" not in ds.field_data:
+            geometry.convert_coord_system(ds, source_coord_system, self.coord_system)
         if not params.get("name"):
             params["name"] = f"ds{len(self._datasets)}"
 
@@ -511,7 +518,7 @@ class TractViewer(LegacyMethodsMixin):
         return vtkjs.export_html(self, output_path, title=title, max_streamlines=max_streamlines,
                                  max_voxels=max_voxels or vtkjs.DEFAULT_MAX_VOXELS)
 
-    def serve(self, host: str = "127.0.0.1", port: int = 8080, open_browser: bool = False,
+    def serve(self, host: str = "0.0.0.0", port: int = 8080, open_browser: bool = False,
               title: str = "TractViewer", max_streamlines: Optional[int] = None,
               max_voxels: Optional[int] = None):
         """vtk.js web interface with file uploads (blocking, Ctrl+C to stop)."""
@@ -519,6 +526,13 @@ class TractViewer(LegacyMethodsMixin):
         server.serve(self, host=host, port=port, open_browser=open_browser, title=title,
                      max_streamlines=max_streamlines,
                      max_voxels=max_voxels or vtkjs.DEFAULT_MAX_VOXELS)
+
+    def desktop(self, title: str = "TractViewer", max_streamlines: Optional[int] = None,
+                max_voxels: Optional[int] = None, debug: bool = False):
+        """vtk.js interface in a native window (pywebview), blocking until it is closed."""
+        from tractviewer.web import desktop, vtkjs
+        desktop.run(self, title=title, max_streamlines=max_streamlines,
+                    max_voxels=max_voxels or vtkjs.DEFAULT_MAX_VOXELS, debug=debug)
 
     # ------------------------------
     # Helpers

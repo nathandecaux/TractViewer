@@ -20,9 +20,10 @@ pip install git+https://github.com/nathandecaux/TractViewer.git
 tractviewer web --open                                # empty page, add files from the browser
 tractviewer web anat.nii.gz bundle.trk --open         # start with some files
 tractviewer html anat.nii.gz bundle.vtk -o scene.html # standalone page, no server needed
+tractviewer desktop anat.nii.gz bundle.trk            # same interface in a native window
 ```
 
-`tractviewer web` serves the interface on <http://127.0.0.1:8080>. `tractviewer html` writes a single
+`tractviewer web` serves the interface on <http://0.0.0.0:8080>. `tractviewer html` writes a single
 self-contained HTML file you can open locally or share.
 
 ## Web interface
@@ -34,6 +35,17 @@ trip to the server.
 - **Objects**: pick the array to color by, the colormap, the range, a solid color, opacity, line
   width, representation; toggle visibility or remove an object. Vector arrays are colored by
   magnitude. Colormaps are sampled from matplotlib, so colors match the pyvista rendering.
+- **Colormaps**: the picker shows a preview of each colormap. Common ones come first, more are
+  in the *Extras* (sequential, diverging, cyclic), *Categorical* (tab10, Set1, Paired…) and
+  *Custom* (per-file `cmap`) sub-menus. *Reverse colormap* flips it.
+- **Discrete coloring** (meshes and volumes): switch *Coloring* to *Discrete* to color by classes.
+  Each class has a color and a value range (*From* = *To* for a single value). Classes can be
+  generated as one per distinct value (labels, up to 256), equal intervals over Min–Max, or
+  quantiles, with colors from a categorical palette or any discretized colormap; then edit, add
+  or remove them. Values outside every class use the *Other values* color. The *∅* (empty)
+  toggle of a class, or of *Other values*, hides those values: mesh parts and voxels become
+  invisible (e.g. hide the background label 0 of an atlas to see the objects behind the slices). The legend lists the
+  classes; volume slices use nearest-neighbor interpolation so labels do not blend.
 - **Add files** (`web` only): use the button or drop files on the view; a loading indicator shows
   while the file is processed. Uploaded files go through the same loading as the CLI, including the
   projection of tractograms onto the affine of the first NIfTI.
@@ -45,20 +57,47 @@ trip to the server.
   marching cubes, choosing the iso value and the number of smoothing iterations (windowed sinc).
   It is computed in the browser, so it also works in exported pages. To compute it in Python
   instead, pass `marching_cubes=true` (and `smooth`, `iso`) in the file parameters.
+- **2D views**: the *3 slices + 3D* layout (View section) shows axial, sagittal and coronal views
+  (radiological convention: patient right on the left) next to the 3D view. They show the slices of
+  the reference volume and, optionally, the objects within a slab around each slice. Mouse wheel
+  moves the slice of the view (Shift: 5 steps, Ctrl: zoom), click/drag moves the cross (the two
+  other slices), right-drag zooms, Shift/middle-drag pans, double-click resets the view. The cross
+  and labels are drawn into PNG captures and GIFs.
 - **Clipping**: cut the objects with the active planes, either as a slab of adjustable thickness
   or by keeping one side of each plane.
 - **Rotation GIF**: full turn around the vertical axis of the current view, with frame count, FPS
   and width settings. Encoded in the browser, so it also works in pages exported with `html`.
+- **Export to standalone HTML**: saves the current scene as a single HTML file: uploaded files,
+  display settings, isosurfaces computed in the browser, slices and camera. Like `tractviewer html`,
+  the file loads vtk.js from a CDN.
 - **View**: anatomical presets (left, right, anterior, posterior, superior, inferior), PNG capture,
-  background color.
+  background color, **RAS axes**: an orientation marker that follows the camera, drag it anywhere
+  in the view; it is drawn into PNG captures and GIFs (on by default with `--ras-axes`).
 
 Large datasets: `--max-streamlines N` subsamples tractograms (fixed seed) and `--max-voxels N`
 decimates volumes (default 16e6). A 3.6M-voxel volume adds about 20 MB to the page.
 
 Notes:
 - The page loads vtk.js (and the GIF encoder, on demand) from the jsdelivr CDN.
-- Uploads have no authentication. The server listens on 127.0.0.1 by default; only use
+- Uploads have no authentication. The server listens on 0.0.0.0 by default; only use
   `--host 0.0.0.0` on a trusted network.
+
+## Desktop app
+
+`tractviewer desktop [FILES...]` opens the web interface in a native window
+([pywebview](https://pywebview.flowrl.com/)), without a browser. The server only
+listens on 127.0.0.1 (free port) and stops when the window is closed. vtk.js and
+the GIF encoder are downloaded once into `~/.cache/tractviewer/vendor/` and then
+served locally, so the app works offline afterwards.
+
+```bash
+pip install "tractviewer[desktop] @ git+https://github.com/nathandecaux/TractViewer.git"
+```
+
+Backend: the system webview on Windows (WebView2) and macOS (WKWebView). On Linux,
+GTK/WebKitGTK is used when PyGObject is installed (e.g. `conda install pygobject`
+or the distribution package), otherwise Qt: `pip install "pywebview[qt]"`.
+`--debug` enables the developer tools.
 
 ## Installation
 
@@ -79,6 +118,7 @@ python -m pytest
 
 ```text
 tractviewer web        [FILES...]            web interface (upload, slices, GIF)
+tractviewer desktop    [FILES...]            web interface in a native window (pywebview)
 tractviewer html       FILES... -o x.html    standalone web page
 tractviewer show       FILES...              desktop window (pyvista)
 tractviewer screenshot FILES... -o x.png     PNG capture
@@ -161,6 +201,8 @@ Parameters can be passed as kwargs or as a dict (`vis.add(path, {"cmap": "gray"}
 - `scalar_bar` (alias `show_scalar_bar`), `scalar_bar_args`, `legend`
 - `envelope_voxel_size`, `envelope_smooth`
 - NIfTI loading: `marching_cubes`, `smooth`, `iso`
+- `coord_system`: `RAS` or `LPS`, frame of a mesh/tractogram (e.g. a `.vtk` written by
+  ANIMA/ITK is in LPS); its points are converted to the frame of the viewer
 
 ### Constructor
 
@@ -170,7 +212,7 @@ coord_system=None, iso_value=None)`
 ### Methods
 
 - `add(...)`, `edit(name, ...)`, `remove(name)`
-- `serve(host, port, open_browser)`, `export_html(path)`
+- `serve(host, port, open_browser)`, `desktop()`, `export_html(path)`
 - `show()`, `screenshot(...)`, `record(...)`
 - `names()`, `get_params(name)`, `get_dataset(name)`, `list_arrays()`
 - `TractViewer.from_paths(...)`
@@ -208,6 +250,7 @@ warnings.filterwarnings("ignore", category=TractViewerDeprecationWarning)
 - `web/vtkjs.py`: serialization (meshes, arrays, volumes) and HTML export
 - `web/vtkjs_template.html`: the vtk.js page (panel, slices, isosurface, upload, GIF)
 - `web/server.py`: HTTP server (standard library) with uploads
+- `web/desktop.py`: native window (pywebview) around the server, local vtk.js cache
 - `core.py`: `TractViewer` (datasets, plotter lifecycle, capture, rotation)
 - `loaders.py`: `.tck/.trk`, NIfTI, PNG and pyvista formats
 - `scene.py`: adds the datasets to the pyvista plotter (threshold, legends, contour, envelope)

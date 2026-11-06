@@ -213,9 +213,9 @@ def _request(url, method="GET", data=None, headers=None):
 def test_server_upload_and_delete(bundle_file, nifti_file):
     vis = TractViewer(off_screen=True).add(str(bundle_file), name="bundle")
     app = server.WebApp(vis)
-    httpd = server.make_server(app, "127.0.0.1", 0)
+    httpd = server.make_server(app, "0.0.0.0", 0)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{httpd.server_port}"
+    base = f"http://0.0.0.0:{httpd.server_port}"
     try:
         page = _request(base + "/").decode()
         assert '"server":true' in page
@@ -262,7 +262,7 @@ def test_cli_html_loads_nifti_as_slices(tmp_path, nifti_file):
     html = out.read_text(encoding="utf-8")
     scene = json.loads(re.search(r'id="scene" type="application/json">(.*?)</script>', html, re.S).group(1))
     assert scene["layers"] == [] and [v["id"] for v in scene["volumes"]] == ["mask"]
-    assert 'id="iso-generate"' in html and 'id="loading"' in html
+    assert 'id="iso-generate"' in html and 'id="loading"' in html and 'id="export-html"' in html
 
     cli.main(["html", f"{nifti_file}:marching_cubes=true,smooth=0", "-o", str(out)])
     scene = json.loads(re.search(r'id="scene" type="application/json">(.*?)</script>', out.read_text(encoding="utf-8"), re.S).group(1))
@@ -272,3 +272,15 @@ def test_cli_html_loads_nifti_as_slices(tmp_path, nifti_file):
 def test_cli_web_accepts_no_inputs():
     args = cli.build_parser().parse_args(["web", "--port", "9000"])
     assert args.inputs == [] and args.port == 9000
+
+
+def test_cmap_groups_and_categorical_info():
+    from tractviewer.web import vtkjs
+
+    colormaps = vtkjs.sample_colormaps({"mine": ["red", "green", "blue"]})
+    assert set(vtkjs.DEFAULT_CMAPS) <= set(colormaps)
+    info = vtkjs.cmap_info(colormaps)
+    assert info["viridis"] == {"group": "Standard", "n": 0}
+    assert info["Blues"]["group"] == "Extras"
+    assert info["tab10"] == {"group": "Categorical", "n": 10}
+    assert info["mine"] == {"group": "Custom", "n": 3}

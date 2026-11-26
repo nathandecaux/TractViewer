@@ -75,8 +75,10 @@ def _add_volume(plotter, ds, prm, font_color, scalar_bar_added) -> bool:
 
 def _add_dataset(plotter, ds, prm, font_color, scalar_bar_added) -> bool:
     """Add one dataset; return the new scalar_bar_added state."""
-    if prm.get("volume_render") and isinstance(ds, pv.ImageData) and "nifti_affine" in ds.field_data:
-        return _add_volume(plotter, ds, prm, font_color, scalar_bar_added)
+    if isinstance(ds, pv.ImageData) and "nifti_affine" in ds.field_data and (
+            prm.get("volume_render") or "diffusion_model" in ds.field_data):
+        # Diffusion models: scalar map only (glyphs are drawn by the web interface), MIP by default.
+        return _add_volume(plotter, ds, {"volume_render": "mip", **prm}, font_color, scalar_bar_added)
     mesh = _apply_threshold(ds, prm)
     display_array = _resolve_display_array(mesh, prm)
     mesh, display_array, style = _apply_envelope(mesh, prm, display_array)

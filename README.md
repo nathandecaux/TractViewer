@@ -26,6 +26,8 @@ Supported formats:
 - tractography: `.tck`, `.trk`
 - meshes: anything PyVista/VTK reads (`.vtk`, `.vtp`, ...)
 - NIfTI: `.nii`, `.nii.gz`
+- diffusion models, drawn as glyphs in the 2D views: DTI (MRtrix `dwi2tensor`, Anima),
+  ODF / FOD (MRtrix spherical harmonics), Anima multi-compartment models (`.mcm`, `.mcmx`)
 - images: `.png`
 
 ## Other ways to use TractViewer

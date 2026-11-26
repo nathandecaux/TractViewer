@@ -33,7 +33,8 @@ DISPLAY_PARAMS = {
 # volume_render (raw NIfTI volumes, marching_cubes=false): "mip" (maximum intensity projection) or
 # "composite" (shaded volume rendering); cmap, clim and opacity apply. Values below clim[0] are transparent.
 VOLUME_RENDER_MODES = ("mip", "composite")
-LOAD_PARAMS = {"marching_cubes", "smooth", "iso", "coord_system", "max_points"}
+# model (NIfTI): "dti" | "odf" | "scalar" forces the interpretation of a 4D/5D image (default: detected).
+LOAD_PARAMS = {"marching_cubes", "smooth", "iso", "coord_system", "max_points", "model"}
 KNOWN_PARAMS = DISPLAY_PARAMS | LOAD_PARAMS
 
 # Alternative name -> canonical name.

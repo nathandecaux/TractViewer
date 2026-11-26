@@ -55,7 +55,8 @@ TractViewer(background="white", off_screen=False, window_size=None, show_ras_axe
 - `categorical_legend`, `categorical_max_values`, `unique_values`
 - `scalar_bar` (alias `show_scalar_bar`), `scalar_bar_args`, `legend`
 - `envelope_voxel_size`, `envelope_smooth`
-- NIfTI loading: `marching_cubes`, `smooth`, `iso`
+- NIfTI loading: `marching_cubes`, `smooth`, `iso`, `model` (`dti`, `odf` or `scalar`: forces
+  the interpretation of a 4D/5D image, see [Diffusion models](interface.md#diffusion-models))
 - Tractogram loading: `max_points` (`"auto"` by default, `0` = everything, see
   [Large tractograms](interface.md#large-tractograms))
 - `coord_system`: `RAS` or `LPS`, frame of a mesh/tractogram (e.g. a `.vtk` written by

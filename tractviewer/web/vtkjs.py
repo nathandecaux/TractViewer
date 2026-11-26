@@ -154,9 +154,13 @@ def serialize_dataset(viewer, ds, prm, max_streamlines: Optional[int] = None,
     layer = volume = None
 
     source = _nifti_source(ds)
-    if source is not None:
+    diffusion = "diffusion_model" in ds.field_data
+    if source is not None or diffusion:
         try:
-            volume = nifti_volume(source, viewer.coord_system, max_voxels)
+            if diffusion:
+                volume = diffusion_volume(ds, viewer.coord_system, max_voxels)
+            else:
+                volume = nifti_volume(source, viewer.coord_system, max_voxels)
             volume.update(id=name, name=name, visible=prm.get("visible", True) is not False)
             # Initial display: volume rendering mode (volume_render=mip|composite), colormap, range.
             if prm.get("volume_render"):
@@ -168,7 +172,7 @@ def serialize_dataset(viewer, ds, prm, max_streamlines: Optional[int] = None,
         except Exception:
             warn_debug(f"vtk.js export: volume of '{name}' skipped.", exc=sys.exc_info())
 
-    if not (source is not None and isinstance(ds, pv.ImageData)):  # raw volume: no mesh
+    if not ((source is not None or diffusion) and isinstance(ds, pv.ImageData)):  # raw volume: no mesh
         try:
             mesh, display_array = _prepare_mesh(ds, prm, max_streamlines)
             layer = _serialize_layer(mesh, prm, display_array)
@@ -290,10 +294,40 @@ def nifti_volume(path: Union[str, Path], coord_system: str = "LPS",
 
     img = nib.load(str(path))
     data = np.asarray(img.dataobj, dtype=np.float32)
-    if data.ndim == 4:
+    while data.ndim > 3:
         data = data[..., 0]
-    data = np.nan_to_num(data, nan=0.0)
-    affine = np.asarray(img.affine, dtype=float)
+    return volume_from_array(data, np.asarray(img.affine, dtype=float), coord_system, max_voxels)
+
+
+def diffusion_volume(ds, coord_system: str = "LPS", max_voxels: int = DEFAULT_MAX_VOXELS) -> dict:
+    """Volume (scalar map of the model) + `glyphs` (see tractviewer.diffusion.glyphs)."""
+    from tractviewer.diffusion.glyphs import glyph_payload
+    from tractviewer.diffusion.models import model_array
+
+    affine = np.asarray(ds.field_data["nifti_affine"], dtype=float).reshape(4, 4)
+    volume = volume_from_array(model_array(ds, "intensity"), affine, coord_system, max_voxels)
+    # Darker default window than a plain volume: the glyphs stand out over the map.
+    volume["window"] = [min(volume["range"][0], 0.0), 1.6 * volume["window"][1]]
+    volume["glyphs"] = _encode_tree(glyph_payload(ds, coord_system))
+    return volume
+
+
+def _encode_tree(node):
+    """numpy arrays of a nested dict/list -> base64 (or blob references)."""
+    if isinstance(node, np.ndarray):
+        return _b64(np.ascontiguousarray(node))
+    if isinstance(node, dict):
+        return {k: _encode_tree(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_encode_tree(v) for v in node]
+    return node
+
+
+def volume_from_array(data: np.ndarray, affine: np.ndarray, coord_system: str = "LPS",
+                      max_voxels: int = DEFAULT_MAX_VOXELS) -> dict:
+    """Volume dict of a 3D voxel array placed by its voxel -> RAS `affine` (see nifti_volume)."""
+    data = np.nan_to_num(np.asarray(data, dtype=np.float32), nan=0.0)
+    affine = np.asarray(affine, dtype=float)
     if coord_system.upper() == "LPS":
         affine = np.diag([-1.0, -1.0, 1.0, 1.0]) @ affine
 

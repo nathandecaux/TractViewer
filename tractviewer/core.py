@@ -67,6 +67,8 @@ class TractViewer(LegacyMethodsMixin):
       - marching_cubes: bool (NIfTI, default True)
       - smooth: int smoothing iterations (NIfTI, default 200)
       - iso: float iso value (NIfTI, default: the viewer's iso_value)
+      - model: 'dti' | 'odf' | 'scalar' interpretation of a 4D/5D NIfTI (default: detected);
+        DTI/ODF NIfTI and Anima .mcm/.mcmx are shown as volumes with glyphs in the 2D views
 
     Global parameters (constructor):
       - background: background color (default "white")
@@ -124,10 +126,11 @@ class TractViewer(LegacyMethodsMixin):
         source_coord_system = params.pop("coord_system", None)
         # Tractograms: point budget ("auto" = from the available RAM, 0 = no limit).
         max_points = params.pop("max_points", os.environ.get("TRACTVIEWER_MAX_POINTS", "auto"))
+        model = params.pop("model", None)
         ds = loaders.load(
             data, marching_cubes=marching_cubes, smooth_iterations=smooth_iterations,
             iso_value=self.iso_value if iso is None else iso, coord_system=self.coord_system,
-            max_points=max_points,
+            max_points=max_points, model=model,
         )
         # Meshes (.vtk, ...) carry no frame: coord_system declares it, the points are
         # converted to the frame of the viewer. NIfTI files are placed through their affine.

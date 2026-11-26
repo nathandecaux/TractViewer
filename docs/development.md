@@ -58,6 +58,8 @@ Options: `--only interface|rotation`, `--size 1440x860`, `--scale 2` (retina), `
 - `core.py`: `TractViewer` (datasets, plotter lifecycle, capture, rotation)
 - `cli.py`: command line
 - `loaders.py`: `.tck/.trk`, NIfTI, PNG and pyvista formats
+- `diffusion/`: DTI / ODF / Anima MCM loading (`models.py`), glyph data for the page
+  (`glyphs.py`), NRRD and `.mcm/.mcmx` readers (`io.py`), MRtrix3 SH basis (`sh.py`)
 - `budget.py`: memory budget of tractograms (available RAM → automatic subsampling)
 - `scene.py`: adds the datasets to the pyvista plotter (threshold, legends, contour, envelope)
 - `params.py`: parameter keys, aliases, CLI syntax parsing

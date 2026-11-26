@@ -38,6 +38,13 @@ trip to the server.
   It is computed in the page, so it also works in exported pages. To compute it in Python
   instead, pass `marching_cubes=true` (and `smooth`, `iso`) in the
   [file parameters](cli.md#per-file-parameters).
+- **Diffusion glyphs**: DTI, ODF and MCM files are loaded as a volume (FA, l=0 coefficient or
+  anisotropic fraction) whose 2D views also draw one glyph per voxel of the slice: ellipsoids for
+  DTI and each MCM tensor compartment, spherical-harmonic surfaces for ODFs, colored by direction
+  (red = left-right, green = antero-posterior, blue = superior-inferior). The *Volume* tab sets
+  their size, the minimum FA / weight / amplitude, whether the size follows it, and the sphere
+  resolution. Glyphs are rebuilt in the page when a slice moves, so they also work in exported
+  pages. See [Diffusion models](#diffusion-models).
 - **2D views** (default layout, *2×2* in the toolbar; *3D* for the 3D view alone): axial, sagittal
   and coronal views (radiological convention: patient right on the left) next to the 3D view. They
   show the slices of the reference volume and, optionally, the objects within a slab around each
@@ -88,3 +95,21 @@ RAM; 1 mm steps, ~60 points per streamline):
 
 Other limits: `--max-streamlines N` subsamples tractograms when the page is built and
 `--max-voxels N` decimates volumes (default 16e6). A 3.6M-voxel volume adds about 20 MB to the page.
+
+## Diffusion models
+
+| File | Detection | Glyphs | Map shown |
+|---|---|---|---|
+| Anima DTI: 5D NIfTI `(X, Y, Z, 1, 6)` | automatic | ellipsoids | FA |
+| MRtrix DTI (`dwi2tensor`): 4D NIfTI, 6 volumes | automatic (diffusivities < 0.1) or `model=dti` | ellipsoids | FA |
+| MRtrix ODF / FOD (`dwi2fod`): 4D NIfTI, 15, 28, 45, 66... volumes | automatic (signed coefficients) or `model=odf` | SH surfaces | l=0 coefficient |
+| Anima MCM: `.mcmx` (zip) or `.mcm` (next to its folder) | always | one ellipsoid per tensor compartment | anisotropic fraction |
+
+`model=scalar` loads such a NIfTI as a plain volume (first volume). MRtrix `.mif` files are not
+read: convert them with `mrconvert in.mif out.nii.gz`.
+
+Conventions: MRtrix tensors (xx, yy, zz, xy, xz, yz) and SH coefficients (MRtrix3 basis) are in
+the world (scanner) frame; Anima tensors (xx, xy, yy, xz, yz, zz) are in the voxel frame and are
+rotated by the image orientation. Glyphs are placed on the slice grid (aligned with the world
+axes, nearest neighbour for oblique images). Isotropic MCM compartments (free water...) are not
+drawn; their weights are kept as `weight_<Type>` arrays of the dataset.

@@ -5,6 +5,8 @@ Specialized formats:
   - .tck / .trk : tractography -> PolyData (lines)
   - .nii / .nii.gz : NIfTI -> isosurface (marching cubes) or raw volume
   - .png : image -> ImageData (RGB colors as scalars)
+  - diffusion models (see tractviewer.diffusion): DTI / ODF NIfTI (detected, or
+    model=dti|odf), Anima .mcm/.mcmx -> voxel grid + model arrays (glyphs)
 Everything else is delegated to `pyvista.read`.
 """
 from __future__ import annotations
@@ -20,11 +22,12 @@ DataInput = Union[str, Path, pv.DataSet]
 
 def load(obj: DataInput, marching_cubes: bool = True, smooth_iterations: int = 0,
          iso_value: Optional[float] = None, coord_system: Optional[str] = None,
-         max_points: Union[int, str, None] = "auto") -> pv.DataSet:
+         max_points: Union[int, str, None] = "auto", model: Optional[str] = None) -> pv.DataSet:
     """Load an object (path or already built dataset) as a PyVista dataset.
 
     `iso_value` / `coord_system` only apply to NIfTI files (see `load_nifti`),
-    `max_points` to tractograms (see `load_tractogram`).
+    `max_points` to tractograms (see `load_tractogram`). `model` forces the
+    interpretation of a 4D/5D NIfTI: 'dti', 'odf' or 'scalar' (default: detected).
     """
     if isinstance(obj, pv.DataSet):
         return obj
@@ -36,12 +39,27 @@ def load(obj: DataInput, marching_cubes: bool = True, smooth_iterations: int = 0
     double_suffix = "".join(path.suffixes[-2:]).lower()  # for .nii.gz
     if suffix in (".tck", ".trk"):
         return load_tractogram(path, max_points=max_points)
+    if suffix in (".mcm", ".mcmx"):
+        from tractviewer.diffusion import load_mcm
+        return _tag_coord_system(load_mcm(path), coord_system)
     if suffix == ".nii" or double_suffix == ".nii.gz":
+        from tractviewer.diffusion import load_diffusion_nifti
+        grid = load_diffusion_nifti(path, model)
+        if grid is not None:
+            print(f"Diffusion model '{grid.field_data['diffusion_model'][0]}' loaded from {path.name}")
+            return _tag_coord_system(grid, coord_system)
         return load_nifti(path, marching_cubes=marching_cubes, smooth_iterations=smooth_iterations,
                           iso_value=iso_value, coord_system=coord_system)
     if suffix == ".png":
         return load_png(path)
     return pv.read(path, progress_bar=_progress_bar())
+
+
+def _tag_coord_system(grid: pv.ImageData, coord_system: Optional[str]) -> pv.ImageData:
+    """Frame of a raw volume (affine kept in RAS), like load_nifti(marching_cubes=False)."""
+    target = (coord_system or os.environ.get("TRACTVIEWER_NIFTI_COORD", "RAS")).upper()
+    grid.field_data["coord_system"] = np.array([target], dtype=object)
+    return grid
 
 
 def _progress_bar() -> bool:

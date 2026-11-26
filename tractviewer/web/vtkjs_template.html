@@ -436,6 +436,20 @@
     </div>
 
     <div data-panel="render">
+      <div id="glyph-controls" hidden>
+        <h3 style="margin-top:0">Glyphs (2D views)</h3>
+        <label class="inline">Show glyphs <input type="checkbox" id="glyph-show"></label>
+        <label>Size <output id="glyph-scale-out"></output><input type="range" id="glyph-scale" min="0.2" max="3" step="0.05"></label>
+        <label>Min <span id="glyph-amp-name"></span> <output id="glyph-min-out"></output><input type="range" id="glyph-min" min="0" max="1" step="0.01"></label>
+        <label class="inline">Size proportional to <span id="glyph-amp-name2"></span> <input type="checkbox" id="glyph-by-amp"></label>
+        <div class="field"><span class="field-label">Sphere resolution</span>
+          <div class="segmented" id="glyph-res">
+            <button type="button" data-res="0">Low</button>
+            <button type="button" data-res="1">High</button>
+          </div>
+        </div>
+        <p id="glyph-status" class="muted"></p>
+      </div>
       <div class="field"><span class="field-label">Slice interpolation</span>
         <div class="segmented" id="interp-mode">
           <button type="button" data-mode="linear">Linear</button>
@@ -1219,6 +1233,7 @@
     if (volume.rendering.added) renderer.removeVolume(volume.rendering.actor);
     volume.slices.forEach(({ actor }) => renderer.removeActor(actor));
     volume.views.forEach(({ actor }, k) => views2d[k].renderer.removeActor(actor));
+    if (volume.glyphs) volume.glyphs.views.forEach(({ actor }, k) => views2d[k].renderer.removeActor(actor));
   }
 
   // ---------- Volumes (slices) ----------
@@ -1269,11 +1284,162 @@
         discrete: newDiscrete(),
         // Default iso value between the background and the low end of the window: outer surface.
         isoValue: (spec.range[0] + spec.window[0]) / 2, isoSmooth: 20,
+        glyphs: spec.glyphs ? glyphDefaults(spec.glyphs) : null,
         ...(spec.state ? JSON.parse(JSON.stringify(spec.state)) : {}),
       },
     };
+    if (spec.glyphs) volume.glyphs = buildGlyphs(spec.glyphs);
     applyVolume(volume);
     return volume;
+  }
+
+  // ---------- Diffusion glyphs (2D views) ----------
+  // The page builds the glyphs of the slice shown by each 2D view (DTI / MCM ellipsoids, ODF
+  // spherical harmonics) from per-voxel data on a grid aligned with the world axes.
+  const GLYPH_DEFAULTS = {
+    dti: { scale: 1, minAmp: 0.1, byAmp: false },
+    odf: { scale: 1, minAmp: 0.05, byAmp: false },
+    mcm: { scale: 2, minAmp: 0.05, byAmp: true },  // weights ~0.2-0.6: larger base size
+  };
+  const glyphDefaults = (g) => ({ show: true, scale: 1, res: 0, minAmp: 0, byAmp: false, ...GLYPH_DEFAULTS[g.model] });
+
+  function buildGlyphs(spec) {
+    const n = spec.count;
+    const g = {
+      model: spec.model, kind: spec.kind, ampLabel: spec.ampLabel, n,
+      origin: spec.origin, spacing: spec.spacing, dims: spec.dims,
+      ijk: decode(spec.ijk, Uint16Array), amp: decode(spec.amp, Float32Array),
+    };
+    if (g.kind === 'ellipsoid') {
+      g.matrix = decode(spec.matrix, Float32Array);
+      g.color = decode(spec.color, Uint8Array);
+    } else {
+      g.coeffs = decode(spec.coeffs, Float32Array);
+      g.nCoeffs = spec.nCoeffs;
+    }
+    g.spheres = spec.spheres.map((s) => {
+      const vertices = decode(s.vertices, Float32Array);
+      const nv = vertices.length / 3;
+      const colors = new Uint8Array(3 * nv);  // ODF: each vertex colored by its direction
+      for (let i = 0; i < 3 * nv; i++) colors[i] = Math.round(Math.abs(vertices[i]) * 255);
+      return { vertices, nv, faces: decode(s.faces, Uint32Array), colors, basis: s.basis ? decode(s.basis, Float32Array) : null };
+    });
+    // Entries of each slice, per axis (counting sort): order[axis][offsets[axis][s] .. offsets[axis][s + 1]].
+    g.order = [];
+    g.offsets = [];
+    for (let axis = 0; axis < 3; axis++) {
+      const offsets = new Uint32Array(g.dims[axis] + 1);
+      for (let e = 0; e < n; e++) offsets[g.ijk[3 * e + axis] + 1]++;
+      for (let s = 0; s < g.dims[axis]; s++) offsets[s + 1] += offsets[s];
+      const fill = offsets.slice(0, g.dims[axis]), order = new Uint32Array(n);
+      for (let e = 0; e < n; e++) order[fill[g.ijk[3 * e + axis]]++] = e;
+      g.order.push(order);
+      g.offsets.push(offsets);
+    }
+    g.views = views2d.map((view) => {
+      const mapper = vtkMapper.newInstance();
+      mapper.setColorModeToDirectScalars();
+      mapper.setScalarModeToUsePointData();
+      const actor = vtkActor.newInstance();
+      actor.setMapper(mapper);
+      actor.getProperty().setAmbient(0.3);
+      actor.getProperty().setDiffuse(0.8);
+      actor.setVisibility(false);
+      view.renderer.addActor(actor);
+      return { mapper, actor, sig: null, count: 0 };
+    });
+    return g;
+  }
+
+  // Glyphs of slice `s` along `axis`, pushed toward the camera (-forward) so the image slice
+  // never hides them.
+  function glyphSlice(g, st, axis, s, forward) {
+    const all = g.order[axis].subarray(g.offsets[axis][s], g.offsets[axis][s + 1]);
+    const entries = all.filter((e) => g.amp[e] >= st.minAmp);
+    const sphere = g.spheres[Math.min(st.res, g.spheres.length - 1)];
+    const { vertices: U, faces, nv, basis } = sphere;
+    const nf = faces.length / 3, n = entries.length, nc = g.nCoeffs;
+    const P = new Float32Array(3 * nv * n), N = new Float32Array(3 * nv * n);
+    const C = new Uint8Array(3 * nv * n), polys = new Uint32Array(4 * nf * n);
+    const r0 = 0.5 * st.scale * Math.min(...g.spacing);
+    const radii = new Float32Array(nv);
+    const c = [0, 0, 0];
+    for (let q = 0; q < n; q++) {
+      const e = entries[q];
+      const r = r0 * (st.byAmp ? Math.min(g.amp[e], 1) : 1);
+      for (let i = 0; i < 3; i++) c[i] = g.origin[i] + g.ijk[3 * e + i] * g.spacing[i] - forward[i] * r * 1.05;
+      const base = q * nv;
+      if (g.kind === 'ellipsoid') {
+        const m = g.matrix.subarray(9 * e, 9 * e + 9);
+        const [cr, cg, cb] = [g.color[3 * e], g.color[3 * e + 1], g.color[3 * e + 2]];
+        for (let v = 0; v < nv; v++) {
+          const x = U[3 * v], y = U[3 * v + 1], z = U[3 * v + 2], o = 3 * (base + v);
+          P[o] = c[0] + r * (m[0] * x + m[1] * y + m[2] * z);
+          P[o + 1] = c[1] + r * (m[3] * x + m[4] * y + m[5] * z);
+          P[o + 2] = c[2] + r * (m[6] * x + m[7] * y + m[8] * z);
+          C[o] = cr; C[o + 1] = cg; C[o + 2] = cb;
+        }
+      } else {
+        const off = nc * e;
+        let max = 0;
+        for (let v = 0; v < nv; v++) {
+          let sum = 0;
+          const row = v * nc;
+          for (let j = 0; j < nc; j++) sum += basis[row + j] * g.coeffs[off + j];
+          radii[v] = sum > 0 ? sum : 0;
+          if (sum > max) max = sum;
+        }
+        const k = max > 0 ? r / max : 0;
+        for (let v = 0; v < nv; v++) {
+          const o = 3 * (base + v), rv = k * radii[v];
+          P[o] = c[0] + rv * U[3 * v];
+          P[o + 1] = c[1] + rv * U[3 * v + 1];
+          P[o + 2] = c[2] + rv * U[3 * v + 2];
+          C[o] = sphere.colors[3 * v]; C[o + 1] = sphere.colors[3 * v + 1]; C[o + 2] = sphere.colors[3 * v + 2];
+        }
+      }
+      // Triangles + vertex normals (sum of the adjacent face normals).
+      for (let f = 0; f < nf; f++) {
+        const a = base + faces[3 * f], b = base + faces[3 * f + 1], d = base + faces[3 * f + 2];
+        const t = 4 * (q * nf + f);
+        polys[t] = 3; polys[t + 1] = a; polys[t + 2] = b; polys[t + 3] = d;
+        const ux = P[3 * b] - P[3 * a], uy = P[3 * b + 1] - P[3 * a + 1], uz = P[3 * b + 2] - P[3 * a + 2];
+        const vx = P[3 * d] - P[3 * a], vy = P[3 * d + 1] - P[3 * a + 1], vz = P[3 * d + 2] - P[3 * a + 2];
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+        for (const p of [a, b, d]) { N[3 * p] += nx; N[3 * p + 1] += ny; N[3 * p + 2] += nz; }
+      }
+    }
+    for (let i = 0; i < N.length; i += 3) {
+      const len = Math.hypot(N[i], N[i + 1], N[i + 2]);
+      if (len > 0) { N[i] /= len; N[i + 1] /= len; N[i + 2] /= len; }
+    }
+    const polydata = vtkPolyData.newInstance();
+    polydata.getPoints().setData(P, 3);
+    polydata.getPolys().setData(polys);
+    polydata.getPointData().setScalars(vtkDataArray.newInstance({ name: 'RGB', values: C, numberOfComponents: 3 }));
+    polydata.getPointData().setNormals(vtkDataArray.newInstance({ name: 'Normals', values: N, numberOfComponents: 3 }));
+    return { polydata, count: n };
+  }
+
+  // Rebuild the glyphs of a 2D view only when its slice or the glyph settings changed.
+  function updateGlyphs(volume) {
+    const g = volume.glyphs;
+    if (!g) return;
+    const st = volume.state.glyphs;
+    const active = layout.mode === 'quad' && volume.state.visible && st.show;
+    g.views.forEach((v, k) => {
+      const view = views2d[k];
+      const s = Math.round((slicing.pos[view.axis] - g.origin[view.axis]) / g.spacing[view.axis]);
+      const on = active && s >= 0 && s < g.dims[view.axis];
+      const sig = on ? `${s}|${st.scale}|${st.minAmp}|${st.byAmp}|${st.res}` : 'off';
+      if (sig === v.sig) return;
+      v.sig = sig;
+      const { polydata, count } = on ? glyphSlice(g, st, view.axis, s, view.forward) : { polydata: vtkPolyData.newInstance(), count: 0 };
+      v.count = count;
+      v.mapper.setInputData(polydata);
+      v.actor.setVisibility(on);
+      view.renderer.resetCameraClippingRange();
+    });
   }
 
   function applyVolume(volume) {
@@ -1300,6 +1466,7 @@
       else prop.setInterpolationTypeToLinear();
     });
     applyVolumeRendering(volume);
+    updateGlyphs(volume);
   }
 
   // MIP / composite rendering: same color transfer function as the slices; opacity 0 at or below Min.
@@ -1474,6 +1641,7 @@
         actor.setVisibility(active);
         if (active) mapper.setSlice(sliceIndex(views2d[k].axis));
       });
+      updateGlyphs(volume);
     }
     const showPlanes = !ref || ref.kind !== 'volume';
     planes.forEach(({ source, actor }, axis) => {
@@ -1981,6 +2149,11 @@
     rows.push(['Extent', [0, 1, 2].map((i) => fmt(b[2 * i + 1] - b[2 * i])).join(' × ') + ' mm'],
       ['Bounds x', `${fmt(b[0])} … ${fmt(b[1])}`], ['Bounds y', `${fmt(b[2])} … ${fmt(b[3])}`], ['Bounds z', `${fmt(b[4])} … ${fmt(b[5])}`],
       ['Frame', SCENE.coordSystem]);
+    if (obj.glyphs) {
+      const MODEL_NAMES = { dti: 'diffusion tensor (DTI)', odf: 'ODF (spherical harmonics)', mcm: 'multi-compartment model (MCM)' };
+      rows.splice(2, 0, ['Diffusion model', MODEL_NAMES[obj.glyphs.model] || obj.glyphs.model],
+        ['Glyphs', `${obj.glyphs.n.toLocaleString('en')} (${obj.glyphs.kind === 'sh' ? `${obj.glyphs.nCoeffs} SH coefficients` : 'ellipsoids'})`]);
+    }
     if (obj.tract) rows.splice(2, 0, ['Streamlines', `${obj.tract.shown.toLocaleString('en')} shown / ${obj.tract.count.toLocaleString('en')}`]);
     if (hasScalarColors(obj)) {
       const hist = histogramOf(obj);
@@ -2008,7 +2181,8 @@
     if (!obj || !contextUi.open) return;  // hidden panel: nothing to update
     const s = obj.state;
     const isMesh = obj.kind === 'mesh';
-    $('item-kind').textContent = isMesh ? (obj.tract ? 'tracts' : isIsoId(obj.id) ? 'isosurface' : 'mesh') : 'volume';
+    $('item-kind').textContent = isMesh ? (obj.tract ? 'tracts' : isIsoId(obj.id) ? 'isosurface' : 'mesh')
+      : (obj.glyphs ? obj.glyphs.model.toUpperCase() : 'volume');
     document.querySelectorAll('#context [data-kind]').forEach((node) => {
       const kind = node.dataset.kind;
       node.hidden = kind === 'tract' ? !obj.tract : kind !== obj.kind;
@@ -2040,6 +2214,7 @@
       setSlider('point-size', s.pointSize);
     } else {
       $('volume-render').value = s.render || 'none';
+      renderGlyphControls(obj);
       $('iso-value').value = +s.isoValue.toPrecision(6);
       setSlider('iso-smooth', s.isoSmooth);
     }
@@ -2071,6 +2246,24 @@
       if (contextUi.tab === 'color') drawHistogram(obj);
     }
     setSlider('opacity', s.opacity);
+  }
+
+  function renderGlyphControls(obj) {
+    const g = obj.glyphs;
+    $('glyph-controls').hidden = !g;
+    if (!g) return;
+    const st = obj.state.glyphs;
+    $('glyph-show').checked = st.show;
+    setSlider('glyph-scale', st.scale);
+    setSlider('glyph-min', st.minAmp);
+    $('glyph-amp-name').textContent = g.ampLabel;
+    $('glyph-amp-name2').textContent = g.ampLabel;
+    $('glyph-by-amp').checked = st.byAmp;
+    document.querySelectorAll('#glyph-res button').forEach((b) => b.classList.toggle('active', +b.dataset.res === st.res));
+    const shown = g.views.reduce((sum, v) => sum + v.count, 0);
+    $('glyph-status').textContent = layout.mode !== 'quad'
+      ? 'Glyphs are drawn in the 2D views: switch to the 2×2 layout.'
+      : `${shown.toLocaleString('en')} glyphs in the 2D views (${g.n.toLocaleString('en')} in the volume).`;
   }
 
   function setSlider(id, value) {
@@ -3004,6 +3197,14 @@
   $('tract-reset').addEventListener('click', () => updateTractFilter((f) => { f.percent = 100; f.min = null; f.max = null; }));
   $('tract-orient').addEventListener('click', () => updateSelected((o) => {
     o.state.arrayKey = isDirect(o) ? null : ORIENT_KEY;
+  }));
+  const updateGlyphState = (mutator) => updateSelected((o) => { if (o.kind === 'volume' && o.glyphs) mutator(o.state.glyphs); });
+  $('glyph-show').addEventListener('change', (e) => updateGlyphState((st) => { st.show = e.target.checked; }));
+  $('glyph-scale').addEventListener('input', (e) => updateGlyphState((st) => { st.scale = +e.target.value; }));
+  $('glyph-min').addEventListener('input', (e) => updateGlyphState((st) => { st.minAmp = +e.target.value; }));
+  $('glyph-by-amp').addEventListener('change', (e) => updateGlyphState((st) => { st.byAmp = e.target.checked; }));
+  document.querySelectorAll('#glyph-res button').forEach((button) => button.addEventListener('click', () => {
+    updateGlyphState((st) => { st.res = +button.dataset.res; });
   }));
   document.querySelectorAll('#interp-mode button').forEach((button) => button.addEventListener('click', () => {
     updateSelected((o) => { o.state.interp = button.dataset.mode; });

@@ -12,7 +12,16 @@ ROOT = Path(SPECPATH).parent
 PKG = Path(SPECPATH)
 VERSION = re.search(r'__version__ = "([^"]+)"', (ROOT / "tractviewer" / "_version.py").read_text()).group(1)
 
-datas = collect_data_files("tractviewer")  # vtkjs_template.html
+# The checkout must be importable here: the collect_* helpers import the package to locate it,
+# and silently return nothing when it is not installed (CI uninstalls it).
+sys.path.insert(0, str(ROOT))
+
+# Package data files (vtkjs_template.html...), taken from the checkout by path.
+datas = [(str(f), str(f.parent.relative_to(ROOT)))
+         for f in (ROOT / "tractviewer").rglob("*")
+         if f.is_file() and f.suffix not in (".py", ".pyc") and "__pycache__" not in f.parts]
+if not any(Path(src).name == "vtkjs_template.html" for src, _ in datas):
+    raise SystemExit("tractviewer/web/vtkjs_template.html not found: the interface would not load")
 binaries = []
 hiddenimports = collect_submodules("tractviewer") + collect_submodules("imageio.plugins")
 

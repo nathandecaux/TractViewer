@@ -158,7 +158,11 @@ jobs:
             Windows) exe=dist/TractViewer/TractViewer.exe ;;
             *)       exe=dist/TractViewer/TractViewer ;;
           esac
-          "$exe" --version
+          timeout 120 "$exe" --version
+          # The page of the interface must build (template, serialization): same code as the window.
+          python -c "import pyvista as pv; pv.Sphere().save('smoke.vtk')"
+          timeout 300 "$exe" html smoke.vtk -o smoke.html
+          grep -q "smoke" smoke.html && echo "interface page OK ($(wc -c < smoke.html) bytes)"
 
       - name: Package (Windows installer)
         if: runner.os == 'Windows'

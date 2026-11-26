@@ -39,8 +39,8 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -66,7 +66,7 @@ jobs:
       prerelease: ${{ steps.v.outputs.prerelease }}
       ref: ${{ steps.v.outputs.ref }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: v
         env:
           BUMP: ${{ inputs.release }}
@@ -122,10 +122,10 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       NAME: TractViewer-${{ needs.prepare.outputs.version }}-${{ matrix.id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.ref }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -158,10 +158,12 @@ jobs:
             Windows) exe=dist/TractViewer/TractViewer.exe ;;
             *)       exe=dist/TractViewer/TractViewer ;;
           esac
-          timeout 120 "$exe" --version
+          # GNU timeout is missing on macOS: perl alarm works on the three runners.
+          run() { local t=$1; shift; perl -e 'alarm shift; exec @ARGV' "$t" "$@"; }
+          run 120 "$exe" --version
           # The page of the interface must build (template, serialization): same code as the window.
           python -c "import pyvista as pv; pv.Sphere().save('smoke.vtk')"
-          timeout 300 "$exe" html smoke.vtk -o smoke.html
+          run 300 "$exe" html smoke.vtk -o smoke.html
           grep -q "smoke" smoke.html && echo "interface page OK ($(wc -c < smoke.html) bytes)"
 
       - name: Package (Windows installer)
@@ -182,7 +184,7 @@ jobs:
         if: runner.os == 'Linux'
         run: packaging/linux/build_appimage.sh dist/TractViewer "dist/$NAME.AppImage"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ env.NAME }}
           path: |
@@ -202,7 +204,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true

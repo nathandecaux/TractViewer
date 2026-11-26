@@ -41,7 +41,14 @@ def load(obj: DataInput, marching_cubes: bool = True, smooth_iterations: int = 0
                           iso_value=iso_value, coord_system=coord_system)
     if suffix == ".png":
         return load_png(path)
-    return pv.read(path, progress_bar=True)
+    return pv.read(path, progress_bar=_progress_bar())
+
+
+def _progress_bar() -> bool:
+    """pyvista progress bars need tqdm and a stderr (None in windowed pre-compiled apps)."""
+    import importlib.util
+    import sys
+    return sys.stderr is not None and importlib.util.find_spec("tqdm") is not None
 
 
 def load_tractogram(path: Path, max_points: Union[int, str, None] = "auto") -> pv.PolyData:

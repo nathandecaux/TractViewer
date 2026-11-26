@@ -46,7 +46,7 @@ jobs:
           cache: pip
       - name: Install
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libegl1 libxrender1 xvfb
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libegl1 libxrender1 xvfb ffmpeg
           python -m pip install --upgrade pip
           python -m pip install . pytest
       - name: Tests

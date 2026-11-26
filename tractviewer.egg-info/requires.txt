@@ -4,6 +4,7 @@ nibabel
 imageio
 matplotlib
 meshio
+tqdm
 
 [:platform_system != "Windows"]
 imageio-ffmpeg

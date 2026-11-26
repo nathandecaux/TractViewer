@@ -11,3 +11,13 @@ tractviewer/core copy.py
 *.gif
 
 __pycache__/TractViewer.cpython-312.pyc
+
+# Desktop builds (packaging/)
+!packaging/icon.png
+!docs/*.png
+!docs/*.gif
+packaging/build/
+/build/
+/dist/
+.claude
+.vscode

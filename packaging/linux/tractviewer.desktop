@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TractViewer
+Comment=Tractography, surface and NIfTI viewer
+Exec=TractViewer %F
+Icon=tractviewer
+Terminal=false
+Categories=Science;MedicalSoftware;Graphics;

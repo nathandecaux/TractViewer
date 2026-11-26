@@ -19,10 +19,12 @@ DataInput = Union[str, Path, pv.DataSet]
 
 
 def load(obj: DataInput, marching_cubes: bool = True, smooth_iterations: int = 0,
-         iso_value: Optional[float] = None, coord_system: Optional[str] = None) -> pv.DataSet:
+         iso_value: Optional[float] = None, coord_system: Optional[str] = None,
+         max_points: Union[int, str, None] = "auto") -> pv.DataSet:
     """Load an object (path or already built dataset) as a PyVista dataset.
 
-    `iso_value` / `coord_system` only apply to NIfTI files (see `load_nifti`).
+    `iso_value` / `coord_system` only apply to NIfTI files (see `load_nifti`),
+    `max_points` to tractograms (see `load_tractogram`).
     """
     if isinstance(obj, pv.DataSet):
         return obj
@@ -33,7 +35,7 @@ def load(obj: DataInput, marching_cubes: bool = True, smooth_iterations: int = 0
     suffix = path.suffix.lower()
     double_suffix = "".join(path.suffixes[-2:]).lower()  # for .nii.gz
     if suffix in (".tck", ".trk"):
-        return load_tractogram(path)
+        return load_tractogram(path, max_points=max_points)
     if suffix == ".nii" or double_suffix == ".nii.gz":
         return load_nifti(path, marching_cubes=marching_cubes, smooth_iterations=smooth_iterations,
                           iso_value=iso_value, coord_system=coord_system)
@@ -42,12 +44,17 @@ def load(obj: DataInput, marching_cubes: bool = True, smooth_iterations: int = 0
     return pv.read(path, progress_bar=True)
 
 
-def load_tractogram(path: Path) -> pv.PolyData:
+def load_tractogram(path: Path, max_points: Union[int, str, None] = "auto") -> pv.PolyData:
     """Read a .tck/.trk file into a PolyData where each streamline is a polyline.
 
+    max_points: point budget. "auto" (default) = what the available RAM affords
+    (see tractviewer.budget); None/0 = everything. Above the budget, streamlines are
+    drawn at random (fixed seed) while the file is read lazily.
+
     Added arrays:
-      - cell_data['streamline_id'], cell_data['length_mm']
+      - cell_data['streamline_id'] (index in the file), cell_data['length_mm']
       - point_data['point_index'] (local index along the streamline)
+      - field_data['subsampling'] = [kept streamlines, streamlines in the file] when subsampled
     """
     try:
         import nibabel as nib
@@ -55,36 +62,67 @@ def load_tractogram(path: Path) -> pv.PolyData:
         raise ImportError(
             "nibabel is required to load tractography files (.tck/.trk): 'pip install nibabel'"
         ) from e
+    from tractviewer import budget
 
-    streamlines = nib.streamlines.load(str(path)).streamlines
+    lazy = nib.streamlines.load(str(path), lazy_load=True)
+    count, n_points = budget.estimate_points(path, lazy.header)
+    limit = budget.affordable_points() if max_points == "auto" else (int(max_points) if max_points else 0)
+    fraction = 1.0 if not limit or not n_points or n_points <= limit else limit / n_points
 
-    points = []
-    lines = []
-    lengths = []
-    stream_ids = []
-    point_indices = []
-    offset = 0
-    for sid, sl in enumerate(streamlines):
-        npts = sl.shape[0]
-        if npts < 2:
-            continue
-        points.append(sl.astype(np.float32))
-        lines.append(npts)
-        lines.extend(range(offset, offset + npts))  # polyline VTK: [npts, p0, p1, ...]
-        lengths.append(float(np.linalg.norm(np.diff(sl, axis=0), axis=1).sum()))
-        stream_ids.append(sid)
-        point_indices.extend(range(npts))
-        offset += npts
+    if fraction >= 1.0:
+        seq = nib.streamlines.load(str(path)).streamlines  # eager: one contiguous array
+        data = np.asarray(seq.get_data(), dtype=np.float32)
+        counts = np.asarray(seq._lengths, dtype=np.int64)
+        ids = np.arange(len(counts))
+        total = len(counts)
+    else:
+        # Lazy read, keep each streamline with probability `fraction` (fixed seed).
+        rng = np.random.default_rng(0)
+        chunk, kept, ids = [], [], []
+        total = 0
+        for sid, sl in enumerate(lazy.streamlines):
+            if rng.random() < fraction:
+                kept.append(np.asarray(sl, dtype=np.float32))
+                ids.append(sid)
+            total += 1
+        counts = np.array([len(s) for s in kept], dtype=np.int64)
+        data = np.concatenate(kept) if kept else np.zeros((0, 3), np.float32)
+        ids = np.asarray(ids)
+        del kept
+        warnings.warn(f"{path.name}: {len(ids):,} / {total:,} streamlines loaded "
+                      f"(automatic subsampling: {n_points:,} points > memory budget of {limit:,}).")
 
-    if not points:
+    # Streamlines of fewer than 2 points are dropped.
+    valid = counts >= 2
+    if not valid.all():
+        starts = np.repeat(valid, counts)
+        data, counts, ids = data[starts], counts[valid], ids[valid]
+    if not len(counts):
         raise ValueError(f"No valid streamline in {path}.")
 
+    n = len(data)
+    first = np.cumsum(counts) - counts                    # first point of each streamline
+    # VTK polylines: [npts, p0, p1, ...] for each streamline.
+    lines = np.empty(n + len(counts), dtype=np.int64)
+    heads = first + np.arange(len(counts))
+    is_head = np.zeros(len(lines), dtype=bool)
+    is_head[heads] = True
+    lines[heads] = counts
+    lines[~is_head] = np.arange(n)
+    point_index = np.arange(n) - np.repeat(first, counts)
+    steps = np.linalg.norm(np.diff(data, axis=0), axis=1)
+    steps = np.concatenate([[0.0], steps])
+    steps[first] = 0.0                                    # no step between two streamlines
+    lengths = np.add.reduceat(steps, first)
+
     poly = pv.PolyData()
-    poly.points = np.vstack(points)
-    poly.lines = np.array(lines, dtype=np.int32)
-    poly.cell_data["streamline_id"] = np.array(stream_ids, dtype=np.int32)
-    poly.cell_data["length_mm"] = np.array(lengths, dtype=np.float32)
-    poly.point_data["point_index"] = np.array(point_indices, dtype=np.int32)
+    poly.points = data
+    poly.lines = lines
+    poly.cell_data["streamline_id"] = ids.astype(np.int32)
+    poly.cell_data["length_mm"] = lengths.astype(np.float32)
+    poly.point_data["point_index"] = point_index.astype(np.int32)
+    if len(counts) < total:
+        poly.field_data["subsampling"] = np.array([len(counts), total], dtype=np.int64)
     return poly
 
 
@@ -123,6 +161,8 @@ def load_nifti(path: Path, marching_cubes: bool = True, smooth_iterations: int =
         grid.field_data["nifti_affine"] = affine.astype(np.float32).ravel()
         grid.field_data["nifti_dims"] = np.array(dims, dtype=np.int32)
         grid.field_data["source_file"] = np.array([str(path)], dtype=object)
+        target = (coord_system or os.environ.get("TRACTVIEWER_NIFTI_COORD", "RAS")).upper()
+        grid.field_data["coord_system"] = np.array([target], dtype=object)  # for volume rendering
         print(f"NIfTI volume loaded (no marching cubes) from {path.name}")
         return grid
 

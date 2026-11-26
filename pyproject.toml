@@ -1,6 +1,6 @@
 [project]
 name = "tractviewer"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Tractography, surface and NIfTI viewer: vtk.js web interface and headless pyvista rendering"
 authors = [ { name = "Anonymous" } ]
 license = { text = "MIT" }
@@ -13,11 +13,13 @@ dependencies = [
   "imageio",
   "imageio-ffmpeg; platform_system != 'Windows'",
   "matplotlib",
-  "meshio"
+  "meshio",
+  # desktop mode; on Linux pywebview ships no GUI backend -> Qt WebEngine wheels (PyQt6)
+  "pywebview>=5; sys_platform != 'linux'",
+  "pywebview[qt]>=5; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
-desktop = ["pywebview>=5"]
 offscreen = [
   # Installation hors-écran (nécessite index supplémentaire Kitware)
   # Commande suggérée: pip install vtk-osmesa --extra-index-url https://gitlab.kitware.com/api/v4/projects/13/packages/pypi/simple
@@ -30,6 +32,9 @@ tractviewer = "tractviewer.cli:main"
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "tractviewer._version.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["tractviewer*"]

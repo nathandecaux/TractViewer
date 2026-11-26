@@ -37,11 +37,13 @@ INPUT_HELP = (
 # Parser (subcommands)
 # ------------------------------
 def build_parser() -> argparse.ArgumentParser:
+    from tractviewer import __version__
     p = argparse.ArgumentParser(
         prog="tractviewer",
         description="Tractography / surface / NIfTI viewer.",
         epilog="Former syntax (deprecated): tractviewer FILES [--screenshot ...] [--rotate N] [--web]",
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     options = argparse.ArgumentParser(add_help=False)
@@ -50,6 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--window-size", type=_window_size, metavar="WxH", help="Window size (e.g. 1280x720)")
     g.add_argument("--color", help="Default color of datasets without 'color'")
     g.add_argument("--ras-axes", action="store_true", help="Show RAS axes")
+    g.add_argument("--max-points", metavar="N|auto",
+                   help="Point budget of each tractogram (.trk/.tck): larger files are subsampled "
+                        "at loading. 'auto' (default) = from the available RAM, 0 = no limit")
     g = options.add_argument_group("NIfTI")
     g.add_argument("--no-marching-cubes", action="store_true",
                    help="Load the raw volume (no isosurface). Always the case for web/html, "
@@ -82,6 +87,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-streamlines", type=int, help="Subsample large tractograms")
     sp.add_argument("--max-voxels", type=int, help="Decimate large volumes (default: 16e6)")
     sp.add_argument("--debug", action="store_true", help="Enable the webview developer tools")
+    sp.add_argument("--no-update-check", action="store_true",
+                    help="Pre-compiled app: do not look for a newer release at startup")
 
     sp = sub.add_parser("html", parents=[common], help="Standalone vtk.js HTML page")
     sp.add_argument("-o", "--output", type=Path, required=True, help=".html file")
@@ -116,7 +123,7 @@ def _window_size(value: str) -> Tuple[int, int]:
 
 def main(argv: Optional[List[str]] = None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help"):
+    if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help", "--version"):
         return legacy_main(argv)
 
     args = build_parser().parse_args(argv)
@@ -128,14 +135,16 @@ def main(argv: Optional[List[str]] = None):
     # Web pages show NIfTI files as slices; the isosurface is generated on demand in the page
     # (or in Python with the per-file parameter marching_cubes=true).
     marching_cubes = not args.no_marching_cubes and cmd not in ("web", "desktop", "html")
-    _add_inputs(vis, args.inputs, color=args.color, marching_cubes=marching_cubes, smooth=args.smooth)
+    _add_inputs(vis, args.inputs, color=args.color, marching_cubes=marching_cubes, smooth=args.smooth,
+                max_points=args.max_points)
 
     if cmd == "web":
         vis.serve(host=args.host, port=args.port, open_browser=args.open, title=args.title,
                   max_streamlines=args.max_streamlines, max_voxels=args.max_voxels)
     elif cmd == "desktop":
         vis.desktop(title=args.title, max_streamlines=args.max_streamlines,
-                    max_voxels=args.max_voxels, debug=args.debug)
+                    max_voxels=args.max_voxels, debug=args.debug,
+                    check_updates=not args.no_update_check)
     elif cmd == "html":
         out = vis.export_html(args.output, title=args.title, max_streamlines=args.max_streamlines,
                               max_voxels=args.max_voxels)
@@ -153,10 +162,12 @@ def main(argv: Optional[List[str]] = None):
         print(describe(vis))
 
 
-def _add_inputs(vis, inputs, color=None, marching_cubes=True, smooth=None):
+def _add_inputs(vis, inputs, color=None, marching_cubes=True, smooth=None, max_points=None):
     for raw in inputs:
         path_str, meta = parse_spec(raw)
         meta.setdefault("name", stem(path_str))
+        if max_points is not None:
+            meta.setdefault("max_points", max_points)
         if not marching_cubes:
             meta.setdefault("marching_cubes", False)
         if smooth is not None:

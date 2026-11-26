@@ -6,6 +6,7 @@ tractviewer/__init__.py
 tractviewer/_deprecation.py
 tractviewer/_legacy.py
 tractviewer/backend.py
+tractviewer/budget.py
 tractviewer/cli.py
 tractviewer/core.py
 tractviewer/debug.py
@@ -25,6 +26,7 @@ tractviewer.egg-info/entry_points.txt
 tractviewer.egg-info/requires.txt
 tractviewer.egg-info/top_level.txt
 tractviewer/web/__init__.py
+tractviewer/web/desktop.py
 tractviewer/web/server.py
 tractviewer/web/vtkjs.py
 tractviewer/web/vtkjs_template.html

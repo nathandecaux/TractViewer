@@ -34,8 +34,49 @@ def populate(plotter, datasets, font_color: str, show_ras_axes: bool = False,
         _add_ras_axes(plotter, font_color, *mesh_rotation)
 
 
+def world_volume(ds: pv.ImageData) -> pv.ImageData:
+    """Raw NIfTI volume (voxel grid + 'nifti_affine') resampled on a grid aligned with the world axes,
+    in the frame of the dataset ('coord_system' field, RAS or LPS)."""
+    from tractviewer.web.vtkjs import _align_to_world
+
+    affine = np.asarray(ds.field_data["nifti_affine"], dtype=float).reshape(4, 4)
+    coord = str(ds.field_data["coord_system"][0]) if "coord_system" in ds.field_data else "RAS"
+    if coord.upper() == "LPS":
+        affine = np.diag([-1.0, -1.0, 1.0, 1.0]) @ affine
+    data = np.asarray(ds.point_data["intensity"]).reshape(ds.dimensions, order="F")
+    out, origin, spacing = _align_to_world(data, affine)
+    grid = pv.ImageData(dimensions=out.shape, origin=tuple(origin), spacing=tuple(spacing))
+    grid.point_data["intensity"] = out.ravel(order="F").astype(np.float32)
+    return grid
+
+
+def _add_volume(plotter, ds, prm, font_color, scalar_bar_added) -> bool:
+    """Volume rendering of a raw NIfTI volume: MIP (blending='maximum') or shaded composite."""
+    grid = world_volume(ds)
+    values = grid.point_data["intensity"]
+    clim = prm.get("clim") or (float(values.min()), float(values.max()))
+    lo, hi = float(clim[0]), float(clim[1])
+    alpha = float(prm.get("opacity", 1.0))
+    # Opacity transfer function over clim: 0 at clim[0] (background), then constant (MIP) or ramp.
+    # 64 samples: pyvista reads an array of n_colors (256) values as 0-255 integers.
+    if prm["volume_render"] == "mip":
+        opacity = np.r_[0.0, np.full(63, alpha)]
+        kwargs = dict(blending="maximum")
+    else:
+        opacity = np.r_[0.0, np.linspace(0.3, 1.0, 63) * alpha]
+        kwargs = dict(blending="composite", shade=True)
+    show_bar = prm.get("scalar_bar", True) and not scalar_bar_added
+    plotter.add_volume(grid, scalars="intensity", cmap=prm.get("cmap") or "viridis", clim=(lo, hi),
+                       opacity=opacity, show_scalar_bar=show_bar,
+                       scalar_bar_args=_scalar_bar_args(prm, prm.get("name") or "intensity", font_color)
+                       if show_bar else None, **kwargs)
+    return scalar_bar_added or show_bar
+
+
 def _add_dataset(plotter, ds, prm, font_color, scalar_bar_added) -> bool:
     """Add one dataset; return the new scalar_bar_added state."""
+    if prm.get("volume_render") and isinstance(ds, pv.ImageData) and "nifti_affine" in ds.field_data:
+        return _add_volume(plotter, ds, prm, font_color, scalar_bar_added)
     mesh = _apply_threshold(ds, prm)
     display_array = _resolve_display_array(mesh, prm)
     mesh, display_array, style = _apply_envelope(mesh, prm, display_array)

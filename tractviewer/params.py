@@ -28,9 +28,12 @@ DISPLAY_PARAMS = {
     "scalar_bar", "scalar_bar_args", "legend", "categorical_legend",
     "categorical_max_values", "unique_values", "point_size", "line_width",
     "points_as_spheres", "ambient", "specular", "diffuse",
-    "envelope_voxel_size", "envelope_smooth",
+    "envelope_voxel_size", "envelope_smooth", "volume_render",
 }
-LOAD_PARAMS = {"marching_cubes", "smooth", "iso", "coord_system"}
+# volume_render (raw NIfTI volumes, marching_cubes=false): "mip" (maximum intensity projection) or
+# "composite" (shaded volume rendering); cmap, clim and opacity apply. Values below clim[0] are transparent.
+VOLUME_RENDER_MODES = ("mip", "composite")
+LOAD_PARAMS = {"marching_cubes", "smooth", "iso", "coord_system", "max_points"}
 KNOWN_PARAMS = DISPLAY_PARAMS | LOAD_PARAMS
 
 # Alternative name -> canonical name.

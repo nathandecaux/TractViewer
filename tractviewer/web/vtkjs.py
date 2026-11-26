@@ -8,6 +8,12 @@ NIfTI is also sent as a volume (slices).
   - serialize_dataset(viewer, ds, prm) -> (mesh layer | None, volume | None)
   - export_html(viewer, path) -> standalone HTML page (vtk.js loaded from a CDN)
 
+Inside `with binary_arrays(store):` (web server), arrays are not embedded as
+base64 but kept in a BlobStore and referenced as {"blob": key}: the page
+downloads them as raw binary (GET /api/blob/<key>). A JSON string in the browser
+is limited to ~536 M characters (V8), i.e. ~20 M streamline points as base64,
+and base64 costs a third more memory.
+
 The web server (file uploads) lives in tractviewer.web.server.
 
 Colormaps are sampled from matplotlib on the Python side, so colors are
@@ -16,9 +22,12 @@ identical to the pyvista rendering.
 from __future__ import annotations
 import base64
 import contextlib
+import contextvars
 import json
 import math
 import sys
+import threading
+import uuid
 from importlib import resources
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
@@ -60,6 +69,44 @@ CUSTOM_GROUP = "Custom"
 CMAP_SAMPLES = 64
 DEFAULT_CMAP = "viridis"
 DEFAULT_MAX_VOXELS = 16_000_000
+# Longest string a browser can hold (V8: 2**29 - 24): limit of a standalone page's scene.
+HTML_MAX_CHARS = 2**29 - 24
+
+
+class BlobStore:
+    """Binary arrays waiting to be downloaded by the page, each served once."""
+
+    def __init__(self):
+        self._arrays: Dict[str, np.ndarray] = {}
+        self._lock = threading.Lock()
+
+    def put(self, values: np.ndarray) -> dict:
+        array = np.ascontiguousarray(values)
+        key = uuid.uuid4().hex
+        with self._lock:
+            self._arrays[key] = array
+        return {"blob": key, "size": int(array.nbytes)}
+
+    def pop(self, key: str) -> Optional[np.ndarray]:
+        with self._lock:
+            return self._arrays.pop(key, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._arrays.clear()
+
+
+_BLOBS: contextvars.ContextVar = contextvars.ContextVar("tractviewer_blobs", default=None)
+
+
+@contextlib.contextmanager
+def binary_arrays(store: BlobStore):
+    """Serialize arrays as references to `store` instead of base64 (see module doc)."""
+    token = _BLOBS.set(store)
+    try:
+        yield store
+    finally:
+        _BLOBS.reset(token)
 
 
 def build_scene(viewer, max_streamlines: Optional[int] = None,
@@ -73,12 +120,17 @@ def build_scene(viewer, max_streamlines: Optional[int] = None,
             extra_cmaps.update(layer.pop("_cmap_def", {}))
             layers.append(layer)
         if volume is not None:
+            if volume.get("cmap"):
+                extra_cmaps[volume["cmap"]] = volume["cmap"]
             volumes.append(volume)
 
     colormaps = sample_colormaps(extra_cmaps)
     for layer in layers:
         if layer.get("cmap") not in colormaps:
             layer["cmap"] = DEFAULT_CMAP
+    for volume in volumes:
+        if volume.get("cmap") and volume["cmap"] not in colormaps:
+            volume.pop("cmap")
 
     return {
         "background": _to_hex(viewer.background, "#ffffff"),
@@ -106,6 +158,13 @@ def serialize_dataset(viewer, ds, prm, max_streamlines: Optional[int] = None,
         try:
             volume = nifti_volume(source, viewer.coord_system, max_voxels)
             volume.update(id=name, name=name, visible=prm.get("visible", True) is not False)
+            # Initial display: volume rendering mode (volume_render=mip|composite), colormap, range.
+            if prm.get("volume_render"):
+                volume["render"] = str(prm["volume_render"])
+            if prm.get("clim") is not None:
+                volume["clim"] = [float(prm["clim"][0]), float(prm["clim"][1])]
+            if isinstance(prm.get("cmap"), str):
+                volume["cmap"] = prm["cmap"]
         except Exception:
             warn_debug(f"vtk.js export: volume of '{name}' skipped.", exc=sys.exc_info())
 
@@ -114,6 +173,9 @@ def serialize_dataset(viewer, ds, prm, max_streamlines: Optional[int] = None,
             mesh, display_array = _prepare_mesh(ds, prm, max_streamlines)
             layer = _serialize_layer(mesh, prm, display_array)
             layer["id"] = name
+            if "subsampling" in ds.field_data:  # automatic subsampling at loading (see budget.py)
+                kept, total = (int(v) for v in np.asarray(ds.field_data["subsampling"]).ravel()[:2])
+                layer["subsampling"] = {"kept": kept, "total": total}
             cmap = prm.get("cmap")
             if isinstance(cmap, str):
                 layer["cmap"] = cmap
@@ -196,7 +258,13 @@ def export_html(viewer, output_path: Union[str, Path], title: str = "TractViewer
     output_path.parent.mkdir(parents=True, exist_ok=True)
     make_names_unique(viewer)
     scene_dict = build_scene(viewer, max_streamlines, max_voxels)
-    output_path.write_text(render_html(scene_dict, title=title, vtkjs_url=vtkjs_url), encoding="utf-8")
+    html = render_html(scene_dict, title=title, vtkjs_url=vtkjs_url)
+    if len(html) > HTML_MAX_CHARS:
+        import warnings
+        warnings.warn(f"{output_path.name}: the embedded scene is {len(html) / 1e6:.0f} M characters; browsers "
+                      f"cannot read a JSON string longer than ~{HTML_MAX_CHARS / 1e6:.0f} M (about 19 M streamline "
+                      "points): use --max-streamlines or max_points to make it smaller.")
+    output_path.write_text(html, encoding="utf-8")
     return str(output_path)
 
 
@@ -380,11 +448,15 @@ def _serialize_array(name: str, location: str, values: np.ndarray) -> Optional[d
     }
 
 
-def _b64(values: np.ndarray) -> str:
+def _b64(values: np.ndarray) -> Union[str, dict]:
+    """Base64 string, or {"blob": key} inside `binary_arrays` (web server)."""
+    store = _BLOBS.get()
+    if store is not None:
+        return store.put(values)
     return base64.b64encode(np.ascontiguousarray(values).tobytes()).decode("ascii")
 
 
-def _b64_cells(cells) -> Optional[str]:
+def _b64_cells(cells) -> Optional[Union[str, dict]]:
     cells = np.asarray(cells)
     return _b64(cells.astype(np.uint32)) if cells.size else None
 

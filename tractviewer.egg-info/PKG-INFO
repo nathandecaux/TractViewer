@@ -13,6 +13,8 @@ Requires-Dist: imageio
 Requires-Dist: imageio-ffmpeg; platform_system != "Windows"
 Requires-Dist: matplotlib
 Requires-Dist: meshio
+Requires-Dist: pywebview>=5; sys_platform != "linux"
+Requires-Dist: pywebview[qt]>=5; sys_platform == "linux"
 Provides-Extra: offscreen
 Requires-Dist: vtk-osmesa; extra == "offscreen"
 
@@ -38,6 +40,7 @@ pip install git+https://github.com/nathandecaux/TractViewer.git
 tractviewer web --open                                # empty page, add files from the browser
 tractviewer web anat.nii.gz bundle.trk --open         # start with some files
 tractviewer html anat.nii.gz bundle.vtk -o scene.html # standalone page, no server needed
+tractviewer desktop anat.nii.gz bundle.trk            # same interface in a native window
 ```
 
 `tractviewer web` serves the interface on <http://0.0.0.0:8080>. `tractviewer html` writes a single
@@ -52,6 +55,17 @@ trip to the server.
 - **Objects**: pick the array to color by, the colormap, the range, a solid color, opacity, line
   width, representation; toggle visibility or remove an object. Vector arrays are colored by
   magnitude. Colormaps are sampled from matplotlib, so colors match the pyvista rendering.
+- **Colormaps**: the picker shows a preview of each colormap. Common ones come first, more are
+  in the *Extras* (sequential, diverging, cyclic), *Categorical* (tab10, Set1, Paired…) and
+  *Custom* (per-file `cmap`) sub-menus. *Reverse colormap* flips it.
+- **Discrete coloring** (meshes and volumes): switch *Coloring* to *Discrete* to color by classes.
+  Each class has a color and a value range (*From* = *To* for a single value). Classes can be
+  generated as one per distinct value (labels, up to 256), equal intervals over Min–Max, or
+  quantiles, with colors from a categorical palette or any discretized colormap; then edit, add
+  or remove them. Values outside every class use the *Other values* color. The *∅* (empty)
+  toggle of a class, or of *Other values*, hides those values: mesh parts and voxels become
+  invisible (e.g. hide the background label 0 of an atlas to see the objects behind the slices). The legend lists the
+  classes; volume slices use nearest-neighbor interpolation so labels do not blend.
 - **Add files** (`web` only): use the button or drop files on the view; a loading indicator shows
   while the file is processed. Uploaded files go through the same loading as the CLI, including the
   projection of tractograms onto the affine of the first NIfTI.
@@ -63,6 +77,14 @@ trip to the server.
   marching cubes, choosing the iso value and the number of smoothing iterations (windowed sinc).
   It is computed in the browser, so it also works in exported pages. To compute it in Python
   instead, pass `marching_cubes=true` (and `smooth`, `iso`) in the file parameters.
+- **2D views** (default layout, *2×2* in the toolbar; *3D* for the 3D view alone): axial, sagittal
+  and coronal views (radiological convention: patient right on the left) next to the 3D view. They
+  show the slices of the reference volume and, optionally, the objects within a slab around each
+  slice. For tractograms, only the streamline pieces crossing the slab are extracted (spatial index
+  built on first use), so the 2D views cost little even for millions of points. Mouse wheel
+  moves the slice of the view (Shift: 5 steps, Ctrl: zoom), click/drag moves the cross (the two
+  other slices), right-drag zooms, Shift/middle-drag pans, double-click resets the view. The cross
+  and labels are drawn into PNG captures and GIFs.
 - **Clipping**: cut the objects with the active planes, either as a slab of adjustable thickness
   or by keeping one side of each plane.
 - **Rotation GIF**: full turn around the vertical axis of the current view, with frame count, FPS
@@ -71,15 +93,56 @@ trip to the server.
   display settings, isosurfaces computed in the browser, slices and camera. Like `tractviewer html`,
   the file loads vtk.js from a CDN.
 - **View**: anatomical presets (left, right, anterior, posterior, superior, inferior), PNG capture,
-  background color.
+  background color, **RAS axes**: an orientation marker that follows the camera, drag it anywhere
+  in the view; it is drawn into PNG captures and GIFs (on by default with `--ras-axes`).
 
-Large datasets: `--max-streamlines N` subsamples tractograms (fixed seed) and `--max-voxels N`
-decimates volumes (default 16e6). A 3.6M-voxel volume adds about 20 MB to the page.
+### Large tractograms
+
+Like MI-Brain, large tractograms are **subsampled at loading by default**. The number of points
+of a `.trk`/`.tck` is estimated from its header and size (without reading it) and compared with
+what the available RAM affords (`budget.py`: half of the available memory, ~250 bytes per point
+for Python + browser, at most 30 M points). Above it, streamlines are drawn at random (fixed seed)
+while the file is read lazily, so the full tractogram is never in memory. The Tracts tab and the
+status bar say when a tractogram was subsampled. Override with `--max-points N` (`0` = no limit),
+per file `bundle.tck:max_points=N`, or `TRACTVIEWER_MAX_POINTS`.
+
+In the web/desktop interface, arrays are downloaded as raw binary (not base64 in the page), so the
+browser's string length limit (~536 M characters, about 19 M points as base64) no longer applies.
+It still applies to standalone HTML pages (`html`, *Export*), which embed the scene: a warning is
+shown above it.
+
+Measured on synthetic tractograms (headless Chrome with software WebGL, so GPU buffers count in
+RAM; 1 mm steps, ~60 points per streamline):
+
+| Points | Load (page ready) | Browser peak | Python peak |
+|---|---|---|---|
+| 1 M | 1.0 s | 1.4 GB | 0.4 GB |
+| 10 M | 3.0 s | 2.5 GB | 1.0 GB |
+| 20 M | 6.9 s | 4.0 GB | 1.6 GB |
+| 40 M | 10.7 s | 6.7 GB | 3.0 GB |
+
+(Before: 10 M points took 10.6 s, 4.4 GB + 2.1 GB, and 20 M points failed to load.)
+
+Other limits: `--max-streamlines N` subsamples tractograms when the page is built and
+`--max-voxels N` decimates volumes (default 16e6). A 3.6M-voxel volume adds about 20 MB to the page.
 
 Notes:
 - The page loads vtk.js (and the GIF encoder, on demand) from the jsdelivr CDN.
 - Uploads have no authentication. The server listens on 0.0.0.0 by default; only use
   `--host 0.0.0.0` on a trusted network.
+
+## Desktop app
+
+`tractviewer desktop [FILES...]` opens the web interface in a native window
+([pywebview](https://pywebview.flowrl.com/)), without a browser. The server only
+listens on 127.0.0.1 (free port) and stops when the window is closed. vtk.js and
+the GIF encoder are downloaded once into `~/.cache/tractviewer/vendor/` and then
+served locally, so the app works offline afterwards.
+
+Backend: the system webview on Windows (WebView2) and macOS (WKWebView). On Linux, the Qt backend is installed as a dependency (PyQt6 + Qt WebEngine wheels).
+GTK/WebKitGTK is used instead when PyGObject is installed (e.g. `conda install pygobject`
+or the distribution package).
+`--debug` enables the developer tools.
 
 ## Installation
 
@@ -100,6 +163,7 @@ python -m pytest
 
 ```text
 tractviewer web        [FILES...]            web interface (upload, slices, GIF)
+tractviewer desktop    [FILES...]            web interface in a native window (pywebview)
 tractviewer html       FILES... -o x.html    standalone web page
 tractviewer show       FILES...              desktop window (pyvista)
 tractviewer screenshot FILES... -o x.png     PNG capture
@@ -142,6 +206,7 @@ An unknown key triggers a warning suggesting the closest valid key.
 - `--background`, `--window-size WxH`, `--color` (default color), `--ras-axes`
 - NIfTI: `--no-marching-cubes`, `--smooth N` (default 200), `--iso V`, `--coord LPS|RAS`
   (`web` and `html` always load NIfTI files as slices unless a file sets `marching_cubes=true`)
+- Tractograms: `--max-points N|auto` (see [Large tractograms](#large-tractograms))
 - `web`: `--host`, `--port`, `--open`, `--title`, `--max-streamlines`, `--max-voxels`
 - `html`: `--title`, `--max-streamlines`, `--max-voxels`
 - `screenshot` / `record`: `--mesh-rotation X Y Z` (default `-90 0 0`)
@@ -182,6 +247,7 @@ Parameters can be passed as kwargs or as a dict (`vis.add(path, {"cmap": "gray"}
 - `scalar_bar` (alias `show_scalar_bar`), `scalar_bar_args`, `legend`
 - `envelope_voxel_size`, `envelope_smooth`
 - NIfTI loading: `marching_cubes`, `smooth`, `iso`
+- Tractogram loading: `max_points` (`"auto"` by default, `0` = everything)
 - `coord_system`: `RAS` or `LPS`, frame of a mesh/tractogram (e.g. a `.vtk` written by
   ANIMA/ITK is in LPS); its points are converted to the frame of the viewer
 
@@ -193,7 +259,7 @@ coord_system=None, iso_value=None)`
 ### Methods
 
 - `add(...)`, `edit(name, ...)`, `remove(name)`
-- `serve(host, port, open_browser)`, `export_html(path)`
+- `serve(host, port, open_browser)`, `desktop()`, `export_html(path)`
 - `show()`, `screenshot(...)`, `record(...)`
 - `names()`, `get_params(name)`, `get_dataset(name)`, `list_arrays()`
 - `TractViewer.from_paths(...)`
@@ -229,10 +295,12 @@ warnings.filterwarnings("ignore", category=TractViewerDeprecationWarning)
 ## Code layout
 
 - `web/vtkjs.py`: serialization (meshes, arrays, volumes) and HTML export
-- `web/vtkjs_template.html`: the vtk.js page (panel, slices, isosurface, upload, GIF)
+- `web/vtkjs_template.html`: the vtk.js page (toolbar, layer list, slices, collapsible right layer panel with contrast histogram and tract filters, isosurface, upload, GIF)
 - `web/server.py`: HTTP server (standard library) with uploads
+- `web/desktop.py`: native window (pywebview) around the server, local vtk.js cache
 - `core.py`: `TractViewer` (datasets, plotter lifecycle, capture, rotation)
 - `loaders.py`: `.tck/.trk`, NIfTI, PNG and pyvista formats
+- `budget.py`: memory budget of tractograms (available RAM -> automatic subsampling)
 - `scene.py`: adds the datasets to the pyvista plotter (threshold, legends, contour, envelope)
 - `params.py`: parameter keys, aliases, CLI syntax parsing
 - `recording.py`: GIF / video writing (ffmpeg)
@@ -244,6 +312,7 @@ warnings.filterwarnings("ignore", category=TractViewerDeprecationWarning)
 - `TRACTVIEWER_NIFTI_COORD=LPS|RAS`: default frame (default LPS; `coord_system=` takes precedence)
 - `TRACTVIEWER_NIFTI_ISO=<value>`: default iso value (default 0.2; `iso_value=` / `iso=` take precedence)
 - `TRACTVIEWER_DEBUG=0|1`: debug logs
+- `TRACTVIEWER_MAX_POINTS=N|auto`: default point budget of tractograms (`max_points=` takes precedence)
 
 ## Practical notes
 

@@ -4,6 +4,9 @@
   POST   /api/upload            body = file content
                                 header: X-Filename (URI encoded)
                                 -> {layers, volumes, updated, colormaps, cmapInfo}
+  POST   /api/save              desktop mode only: file made by the page (PNG, GIF, HTML),
+                                header: X-Filename -> native "Save as" dialog -> {path} | {cancelled}
+  GET    /api/blob/<key>        binary array of the scene (served once, see vtkjs.BlobStore)
   DELETE /api/datasets/<name>   remove a dataset
   GET    /vendor/<file>         local JS library (desktop mode only)
 
@@ -21,7 +24,7 @@ import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import unquote
 
 from tractviewer import loaders
@@ -36,7 +39,8 @@ class WebApp:
 
     def __init__(self, viewer, title: str = "TractViewer", max_streamlines: Optional[int] = None,
                  max_voxels: int = vtkjs.DEFAULT_MAX_VOXELS, vtkjs_url: str = vtkjs.VTKJS_URL,
-                 gifenc_url: str = vtkjs.GIFENC_URL, vendor_dir: Optional[Path] = None):
+                 gifenc_url: str = vtkjs.GIFENC_URL, vendor_dir: Optional[Path] = None,
+                 save_handler: Optional[Callable[[str, Path], Optional[str]]] = None):
         self.viewer = viewer
         self.title = title
         self.max_streamlines = max_streamlines
@@ -44,13 +48,19 @@ class WebApp:
         self.vtkjs_url = vtkjs_url
         self.gifenc_url = gifenc_url
         self.vendor_dir = vendor_dir  # local JS libraries served under /vendor/ (desktop mode)
+        self.blobs = vtkjs.BlobStore()  # binary arrays of the page, downloaded separately
+        # Desktop mode: the webview cannot save downloads (<a download>), so the page sends the
+        # file here; save_handler(suggested name, temporary file) -> saved path or None.
+        self.save_handler = save_handler
         self.lock = threading.Lock()
         self.upload_dir = Path(tempfile.mkdtemp(prefix="tractviewer_upload_"))
         vtkjs.make_names_unique(viewer)
 
     def page(self) -> bytes:
-        with self.lock:
+        with self.lock, vtkjs.binary_arrays(self.blobs) as blobs:
+            blobs.clear()  # arrays of a previous page load that were never downloaded
             scene = vtkjs.build_scene(self.viewer, self.max_streamlines, self.max_voxels, server=True)
+        scene["nativeSave"] = self.save_handler is not None
         return vtkjs.render_html(scene, title=self.title, vtkjs_url=self.vtkjs_url,
                                  gifenc_url=self.gifenc_url).encode("utf-8")
 
@@ -58,7 +68,7 @@ class WebApp:
         """Load an uploaded file. NIfTI files are loaded as volumes (slices); the page
         computes isosurfaces on demand."""
         is_nifti = path.name.lower().endswith((".nii", ".nii.gz"))
-        with self.lock:
+        with self.lock, vtkjs.binary_arrays(self.blobs):
             vis = self.viewer
             name = vtkjs.unique_name(vis, loaders.stem(path.name))
             params = {"name": name}
@@ -103,6 +113,13 @@ def make_server(app: WebApp, host: str = "0.0.0.0", port: int = 8080) -> Threadi
                 self._send(204, b"", "image/x-icon")
                 return
             path = self.path.split("?")[0]
+            if path.startswith("/api/blob/"):
+                array = app.blobs.pop(path[len("/api/blob/"):])
+                if array is None:
+                    self.send_error(404)
+                else:
+                    self._send(200, memoryview(array).cast("B"), "application/octet-stream")
+                return
             if path.startswith("/vendor/") and app.vendor_dir is not None:
                 name = Path(unquote(path[len("/vendor/"):])).name
                 file = app.vendor_dir / name
@@ -117,6 +134,9 @@ def make_server(app: WebApp, host: str = "0.0.0.0", port: int = 8080) -> Threadi
             self._send(200, app.page(), "text/html; charset=utf-8")
 
         def do_POST(self):
+            if self.path == "/api/save" and app.save_handler is not None:
+                self._save_as()
+                return
             if self.path != "/api/upload":
                 self.send_error(404)
                 return
@@ -134,6 +154,20 @@ def make_server(app: WebApp, host: str = "0.0.0.0", port: int = 8080) -> Threadi
                 self._json(400, {"error": f"{filename}: {exc}"})
                 return
             self._json(200, result)
+
+        def _save_as(self):
+            filename = Path(unquote(self.headers.get("X-Filename", ""))).name or "tractviewer"
+            tmp = app.upload_dir / f"save-{uuid.uuid4().hex}"
+            try:
+                self._save_body(tmp)
+                path = app.save_handler(filename, tmp)
+            except Exception as exc:
+                warn_debug(f"Saving '{filename}' failed.", exc=sys.exc_info())
+                self._json(500, {"error": str(exc)})
+                return
+            finally:
+                tmp.unlink(missing_ok=True)
+            self._json(200, {"path": path} if path else {"cancelled": True})
 
         def do_DELETE(self):
             prefix = "/api/datasets/"
@@ -157,7 +191,7 @@ def make_server(app: WebApp, host: str = "0.0.0.0", port: int = 8080) -> Threadi
             self._send(status, json.dumps(payload, separators=(",", ":")).encode("utf-8"),
                        "application/json")
 
-        def _send(self, status, body: bytes, content_type: str):
+        def _send(self, status, body, content_type: str):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))

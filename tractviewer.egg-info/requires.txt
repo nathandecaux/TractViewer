@@ -8,5 +8,11 @@ meshio
 [:platform_system != "Windows"]
 imageio-ffmpeg
 
+[:sys_platform != "linux"]
+pywebview>=5
+
+[:sys_platform == "linux"]
+pywebview[qt]>=5
+
 [offscreen]
 vtk-osmesa

@@ -122,9 +122,12 @@ class TractViewer(LegacyMethodsMixin):
         smooth_iterations = int(params.pop("smooth", 200))
         iso = params.pop("iso", None)
         source_coord_system = params.pop("coord_system", None)
+        # Tractograms: point budget ("auto" = from the available RAM, 0 = no limit).
+        max_points = params.pop("max_points", os.environ.get("TRACTVIEWER_MAX_POINTS", "auto"))
         ds = loaders.load(
             data, marching_cubes=marching_cubes, smooth_iterations=smooth_iterations,
             iso_value=self.iso_value if iso is None else iso, coord_system=self.coord_system,
+            max_points=max_points,
         )
         # Meshes (.vtk, ...) carry no frame: coord_system declares it, the points are
         # converted to the frame of the viewer. NIfTI files are placed through their affine.
@@ -528,11 +531,13 @@ class TractViewer(LegacyMethodsMixin):
                      max_voxels=max_voxels or vtkjs.DEFAULT_MAX_VOXELS)
 
     def desktop(self, title: str = "TractViewer", max_streamlines: Optional[int] = None,
-                max_voxels: Optional[int] = None, debug: bool = False):
-        """vtk.js interface in a native window (pywebview), blocking until it is closed."""
+                max_voxels: Optional[int] = None, debug: bool = False, check_updates: bool = True):
+        """vtk.js interface in a native window (pywebview), blocking until it is closed.
+        check_updates: in the pre-compiled app, offer to install a newer release."""
         from tractviewer.web import desktop, vtkjs
         desktop.run(self, title=title, max_streamlines=max_streamlines,
-                    max_voxels=max_voxels or vtkjs.DEFAULT_MAX_VOXELS, debug=debug)
+                    max_voxels=max_voxels or vtkjs.DEFAULT_MAX_VOXELS, debug=debug,
+                    check_updates=check_updates)
 
     # ------------------------------
     # Helpers

@@ -158,7 +158,7 @@ def serialize_dataset(viewer, ds, prm, max_streamlines: Optional[int] = None,
     if source is not None or diffusion:
         try:
             if diffusion:
-                volume = diffusion_volume(ds, viewer.coord_system, max_voxels)
+                volume = diffusion_volume(ds, viewer.coord_system, max_voxels, prm.get("display_array"))
             else:
                 volume = nifti_volume(source, viewer.coord_system, max_voxels)
             volume.update(id=name, name=name, visible=prm.get("visible", True) is not False)
@@ -299,15 +299,37 @@ def nifti_volume(path: Union[str, Path], coord_system: str = "LPS",
     return volume_from_array(data, np.asarray(img.affine, dtype=float), coord_system, max_voxels)
 
 
-def diffusion_volume(ds, coord_system: str = "LPS", max_voxels: int = DEFAULT_MAX_VOXELS) -> dict:
-    """Volume (scalar map of the model) + `glyphs` (see tractviewer.diffusion.glyphs)."""
+def diffusion_volume(ds, coord_system: str = "LPS", max_voxels: int = DEFAULT_MAX_VOXELS,
+                     display_array: Optional[str] = None) -> dict:
+    """Volume (scalar map of the model) + `glyphs` (see tractviewer.diffusion.glyphs).
+
+    Models with several scalar maps (MCM: anisotropic fraction, isotropic and tensor compartment
+    weights) also carry `maps` [{key, label, data, range, window}] on the same grid, the page
+    switching between them; `display_array` names the one shown first ('intensity' by default).
+    """
     from tractviewer.diffusion.glyphs import glyph_payload
-    from tractviewer.diffusion.models import model_array
+    from tractviewer.diffusion.models import model_array, scalar_maps
 
     affine = np.asarray(ds.field_data["nifti_affine"], dtype=float).reshape(4, 4)
-    volume = volume_from_array(model_array(ds, "intensity"), affine, coord_system, max_voxels)
-    # Darker default window than a plain volume: the glyphs stand out over the map.
-    volume["window"] = [min(volume["range"][0], 0.0), 1.6 * volume["window"][1]]
+
+    def map_volume(key):
+        vol = volume_from_array(model_array(ds, key), affine, coord_system, max_voxels)
+        # Darker default window than a plain volume: the glyphs stand out over the map.
+        vol["window"] = [min(vol["range"][0], 0.0), 1.6 * vol["window"][1]]
+        return vol
+
+    volume = map_volume("intensity")
+    maps = scalar_maps(ds)
+    if len(maps) > 1:
+        volume["maps"] = [{"key": "intensity", "label": maps[0][1], "range": volume["range"], "window": volume["window"]}]
+        for key, label in maps[1:]:
+            vol = map_volume(key)
+            if key.startswith("weight_"):  # compartment fractions: full [0, 1] scale
+                vol["window"] = [0.0, 1.0]
+            volume["maps"].append({"key": key, "label": label, "data": vol["data"],
+                                   "range": vol["range"], "window": vol["window"]})
+        if display_array in [m["key"] for m in volume["maps"]]:
+            volume["map"] = display_array
     volume["glyphs"] = _encode_tree(glyph_payload(ds, coord_system))
     return volume
 

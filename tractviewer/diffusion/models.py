@@ -9,6 +9,7 @@ model arrays it carries (point_data, x fastest, *world RAS frame*):
   - 'odf' : 'sh' (n, n_coeffs), MRtrix3 basis; intensity = l=0 coefficient
   - 'mcm' : 'tensor_<k>' (n, 6) + 'weight_<k>' (n,) per anisotropic compartment,
             'weight_<Type>' for the isotropic ones; intensity = anisotropic fraction
+            (all of them can be shown: see scalar_maps)
 
 Conventions (checked against the FOD peaks of a same subject):
   - MRtrix3 (dwi2tensor, dwi2fod): tensor xx, yy, zz, xy, xz, yz / SH in the world RAS frame.
@@ -163,6 +164,23 @@ def load_mcm(path: Union[str, Path]) -> pv.ImageData:
     grid.field_data["diffusion_model"] = np.array(["mcm"], dtype=object)
     grid.field_data["mcm_compartments"] = np.array([k], dtype=np.int32)
     return grid
+
+
+def scalar_maps(ds: pv.ImageData) -> list:
+    """(array name, label) of the scalar maps a diffusion grid can show, 'intensity' first.
+
+    MCM: anisotropic fraction, weight of each isotropic compartment type (FreeWater, IRWater,
+    StationaryWater...) and of each tensor compartment. Other models: the 'intensity' map only.
+    """
+    kind = str(ds.field_data["diffusion_model"][0])
+    maps = [("intensity", {"dti": "FA", "odf": "l=0 coefficient", "mcm": "Anisotropic fraction"}[kind])]
+    if kind == "mcm":
+        names = list(ds.point_data.keys())
+        maps += [(n, f"{n[len('weight_'):]} weight") for n in names
+                 if n.startswith("weight_") and not n[len("weight_"):].isdigit()]
+        n = int(np.asarray(ds.field_data["mcm_compartments"]).ravel()[0])
+        maps += [(f"weight_{k}", f"Tensor {k + 1} weight") for k in range(n)]
+    return maps
 
 
 def _grid(shape, affine: np.ndarray, path) -> pv.ImageData:

@@ -43,8 +43,19 @@ trip to the server.
   DTI and each MCM tensor compartment, spherical-harmonic surfaces for ODFs, colored by direction
   (red = left-right, green = antero-posterior, blue = superior-inferior). The *Volume* tab sets
   their size, the minimum FA / weight / amplitude, whether the size follows it, and the sphere
-  resolution. Glyphs are rebuilt in the page when a slice moves, so they also work in exported
-  pages. See [Diffusion models](#diffusion-models).
+  resolution (*Auto*: finer spheres as the glyphs get larger on screen). Only the glyphs in the
+  visible part of each 2D view are built, so zooming in costs no more than the whole slice.
+  Glyphs are rebuilt in the page when a slice moves, so they also work in exported pages. For an
+  MCM, the *Map* list of the *Color* tab switches between the anisotropic fraction and the weight
+  of each compartment (FreeWater, IRWater, StationaryWater..., each tensor); `display_array=weight_FreeWater`
+  picks the first one shown. *Project on tract* restricts the glyphs to the voxels crossed by
+  the streamlines shown of a tractogram and, for an MCM, keeps in each voxel the tensor
+  compartment best aligned with the streamlines (largest |principal direction · tangent|, voted
+  every half voxel along the streamlines); it follows the tract filters (length, % shown).
+  *Show in 3D view* also draws the glyphs in the 3D view: all the glyphs kept by the projection,
+  or those of the slices shown without projection. It is on by default only with a projection
+  (the automatic sphere resolution keeps the 3D glyphs under ~3 million vertices).
+  See [Diffusion models](#diffusion-models).
 - **2D views** (default layout, *2×2* in the toolbar; *3D* for the 3D view alone): axial, sagittal
   and coronal views (radiological convention: patient right on the left) next to the 3D view. They
   show the slices of the reference volume and, optionally, the objects within a slab around each
@@ -103,7 +114,7 @@ Other limits: `--max-streamlines N` subsamples tractograms when the page is buil
 | Anima DTI: 5D NIfTI `(X, Y, Z, 1, 6)` | automatic | ellipsoids | FA |
 | MRtrix DTI (`dwi2tensor`): 4D NIfTI, 6 volumes | automatic (diffusivities < 0.1) or `model=dti` | ellipsoids | FA |
 | MRtrix ODF / FOD (`dwi2fod`): 4D NIfTI, 15, 28, 45, 66... volumes | automatic (signed coefficients) or `model=odf` | SH surfaces | l=0 coefficient |
-| Anima MCM: `.mcmx` (zip) or `.mcm` (next to its folder) | always | one ellipsoid per tensor compartment | anisotropic fraction |
+| Anima MCM: `.mcmx` (zip) or `.mcm` (next to its folder) | always | one ellipsoid per tensor compartment | anisotropic fraction, or a compartment weight |
 
 `model=scalar` loads such a NIfTI as a plain volume (first volume). MRtrix `.mif` files are not
 read: convert them with `mrconvert in.mif out.nii.gz`.
@@ -111,5 +122,5 @@ read: convert them with `mrconvert in.mif out.nii.gz`.
 Conventions: MRtrix tensors (xx, yy, zz, xy, xz, yz) and SH coefficients (MRtrix3 basis) are in
 the world (scanner) frame; Anima tensors (xx, xy, yy, xz, yz, zz) are in the voxel frame and are
 rotated by the image orientation. Glyphs are placed on the slice grid (aligned with the world
-axes, nearest neighbour for oblique images). Isotropic MCM compartments (free water...) are not
-drawn; their weights are kept as `weight_<Type>` arrays of the dataset.
+axes, nearest neighbour for oblique images). Isotropic MCM compartments (free water...) have no
+glyph: their weights are maps (`weight_<Type>` arrays of the dataset, `weight_<k>` for the tensors).

@@ -1,4 +1,5 @@
 """Diffusion models (DTI, ODF, Anima MCM): readers, conventions and glyph payload."""
+import base64
 import gzip
 import io
 import zipfile
@@ -111,6 +112,25 @@ def test_mcm_glyphs(tmp_path):
     second = np.flatnonzero(p["compartment"] == 1)[0]
     assert abs(_main_axis(p, first)[0]) > 0.999 and abs(_main_axis(p, second)[1]) > 0.999
     assert np.allclose(p["amp"][p["compartment"] == 0], 0.5)
+    # signed principal direction (projection on tracts): main axis of the ellipsoid
+    assert p["direction"].shape == (48, 3)
+    assert abs(p["direction"][first] @ _main_axis(p, first)) > 0.999
+
+
+def test_mcm_scalar_maps(tmp_path):
+    vis = TractViewer(off_screen=True, coord_system="LPS")
+    vis.add(str(_mcmx(tmp_path)), name="mcm", display_array="weight_FreeWater")
+    volume = vtkjs.diffusion_volume(vis.get_dataset("mcm"), "LPS", display_array="weight_FreeWater")
+    maps = volume["maps"]
+    assert [m["key"] for m in maps] == ["intensity", "weight_FreeWater", "weight_0", "weight_1"]
+    assert [m["label"] for m in maps] == ["Anisotropic fraction", "FreeWater weight", "Tensor 1 weight", "Tensor 2 weight"]
+    assert "data" not in maps[0] and volume["map"] == "weight_FreeWater"
+    free_water = np.frombuffer(base64.b64decode(maps[1]["data"]), np.float32)
+    assert free_water.size == 24 and np.allclose(free_water, 0.2)
+    # pyvista (desktop) rendering of the chosen map
+    from tractviewer.scene import world_volume
+    assert np.allclose(world_volume(vis.get_dataset("mcm"), "weight_FreeWater").point_data["intensity"], 0.2)
+    vis.screenshot(tmp_path / "mcm.png")  # scene._add_volume with display_array
 
 
 # ---------- DTI ----------
@@ -170,10 +190,16 @@ def test_mrtrix_odf_detection_and_payload(tmp_path):
     assert str(ds.field_data["diffusion_model"][0]) == "odf"
     p = glyph_payload(ds, "LPS")
     assert p["kind"] == "sh" and p["nCoeffs"] == 45 and p["count"] >= 8
+    assert [len(s["vertices"]) for s in p["spheres"]] == [42, 162, 642]  # coarse to fine (LOD)
     for sphere in p["spheres"]:  # basis evaluated at display-frame vertices: peak along ±y
         v = sphere["vertices"].reshape(-1, 3)
-        radii = sphere["basis"].reshape(len(v), 45) @ p["coeffs"][0]
+        half = sphere["half"]
+        assert len(half) == len(v) and sphere["basis"].size == 45 * len(v) // 2
+        radii = (sphere["basis"].reshape(-1, 45) @ p["coeffs"][0])[half]
         assert abs(v[np.argmax(radii)][1]) > 0.95
+        # antipodal half: same radii as the basis evaluated at every vertex
+        full = sh.sh_basis(8, v.astype(np.float64) @ np.diag([-1, -1, 1])) @ p["coeffs"][0]
+        assert np.allclose(radii, full, atol=1e-4 * np.abs(full).max())
 
 
 def test_scene_and_server_carry_glyphs(tmp_path):

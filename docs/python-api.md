@@ -49,7 +49,7 @@ TractViewer(background="white", off_screen=False, window_size=None, show_ras_axe
 - `display_array`, `cmap`, `clim`, `color`, `opacity`, `visible`, `name`
 - `threshold=(array, (min, max))`
 - `style`: `surface`, `wireframe`, `points`, `envelope`
-- `points_as_spheres`, `point_size`, `line_width`
+- `points_as_spheres`, `point_size`, `line_width` (down to 0.1: below 1, 1-pixel lines made fainter in proportion)
 - `ambient`, `diffuse`, `specular`
 - `contour` (`True` or a color) and `contour_width`
 - `categorical_legend`, `categorical_max_values`, `unique_values`

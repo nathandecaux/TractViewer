@@ -34,16 +34,17 @@ def populate(plotter, datasets, font_color: str, show_ras_axes: bool = False,
         _add_ras_axes(plotter, font_color, *mesh_rotation)
 
 
-def world_volume(ds: pv.ImageData) -> pv.ImageData:
+def world_volume(ds: pv.ImageData, array: str = "intensity") -> pv.ImageData:
     """Raw NIfTI volume (voxel grid + 'nifti_affine') resampled on a grid aligned with the world axes,
-    in the frame of the dataset ('coord_system' field, RAS or LPS)."""
+    in the frame of the dataset ('coord_system' field, RAS or LPS). `array`: point array shown
+    (diffusion grids: e.g. 'weight_FreeWater' of an MCM), stored as 'intensity'."""
     from tractviewer.web.vtkjs import _align_to_world
 
     affine = np.asarray(ds.field_data["nifti_affine"], dtype=float).reshape(4, 4)
     coord = str(ds.field_data["coord_system"][0]) if "coord_system" in ds.field_data else "RAS"
     if coord.upper() == "LPS":
         affine = np.diag([-1.0, -1.0, 1.0, 1.0]) @ affine
-    data = np.asarray(ds.point_data["intensity"]).reshape(ds.dimensions, order="F")
+    data = np.asarray(ds.point_data[array]).reshape(ds.dimensions, order="F")
     out, origin, spacing = _align_to_world(data, affine)
     grid = pv.ImageData(dimensions=out.shape, origin=tuple(origin), spacing=tuple(spacing))
     grid.point_data["intensity"] = out.ravel(order="F").astype(np.float32)
@@ -52,7 +53,10 @@ def world_volume(ds: pv.ImageData) -> pv.ImageData:
 
 def _add_volume(plotter, ds, prm, font_color, scalar_bar_added) -> bool:
     """Volume rendering of a raw NIfTI volume: MIP (blending='maximum') or shaded composite."""
-    grid = world_volume(ds)
+    array = prm.get("display_array")
+    if not (isinstance(array, str) and array in ds.point_data and ds.point_data[array].ndim == 1):
+        array = "intensity"
+    grid = world_volume(ds, array)
     values = grid.point_data["intensity"]
     clim = prm.get("clim") or (float(values.min()), float(values.max()))
     lo, hi = float(clim[0]), float(clim[1])
@@ -98,9 +102,23 @@ def _add_dataset(plotter, ds, prm, font_color, scalar_bar_added) -> bool:
     for opt in ("point_size", "line_width", "ambient", "specular", "diffuse"):
         if opt in prm:
             add_kwargs[opt] = prm[opt]
+    _apply_thin_lines(mesh, add_kwargs)
 
     plotter.add_mesh(mesh, **{k: v for k, v in add_kwargs.items() if v is not None})
     return scalar_bar_added or bool(add_kwargs.get("show_scalar_bar"))
+
+
+def _apply_thin_lines(mesh, add_kwargs):
+    """OpenGL draws no line thinner than 1 pixel: line_width w < 1 (polylines, wireframe) is
+    rendered as a 1-pixel line with its opacity scaled by w (coverage of a w-pixel line)."""
+    width = add_kwargs.get("line_width")
+    if width is None or float(width) >= 1:
+        return
+    lines_only = isinstance(mesh, pv.PolyData) and mesh.n_lines > 0 and mesh.n_cells == mesh.n_lines
+    opacity = add_kwargs.get("opacity", 1.0)
+    if (lines_only or add_kwargs.get("style") == "wireframe") and isinstance(opacity, (int, float)):
+        add_kwargs["line_width"] = 1.0
+        add_kwargs["opacity"] = float(opacity) * max(float(width), 0.0)
 
 
 def _apply_threshold(ds, prm):

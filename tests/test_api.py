@@ -284,3 +284,17 @@ def test_cmap_groups_and_categorical_info():
     assert info["Blues"]["group"] == "Extras"
     assert info["tab10"] == {"group": "Categorical", "n": 10}
     assert info["mine"] == {"group": "Custom", "n": 3}
+
+
+def test_thin_lines_scale_opacity():
+    """line_width < 1: 1-pixel lines, opacity scaled by the width (OpenGL has no thinner line)."""
+    import pyvista as pv
+    from tractviewer.scene import _apply_thin_lines
+
+    lines = pv.MultipleLines(points=[[0, 0, 0], [1, 0, 0], [1, 1, 0]])
+    kwargs = {"line_width": 0.2, "opacity": 0.5}
+    _apply_thin_lines(lines, kwargs)
+    assert kwargs == {"line_width": 1.0, "opacity": 0.1}
+    surface = {"line_width": 0.2, "opacity": 0.5}
+    _apply_thin_lines(pv.Sphere(), surface)
+    assert surface == {"line_width": 0.2, "opacity": 0.5}  # line width unused on a surface

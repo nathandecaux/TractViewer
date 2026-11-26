@@ -1,6 +1,7 @@
 README.md
 pyproject.toml
 tests/test_api.py
+tests/test_diffusion.py
 tests/test_import.py
 tests/test_linux_integration.py
 tests/test_updater.py
@@ -30,6 +31,11 @@ tractviewer.egg-info/dependency_links.txt
 tractviewer.egg-info/entry_points.txt
 tractviewer.egg-info/requires.txt
 tractviewer.egg-info/top_level.txt
+tractviewer/diffusion/__init__.py
+tractviewer/diffusion/glyphs.py
+tractviewer/diffusion/io.py
+tractviewer/diffusion/models.py
+tractviewer/diffusion/sh.py
 tractviewer/web/__init__.py
 tractviewer/web/desktop.py
 tractviewer/web/server.py

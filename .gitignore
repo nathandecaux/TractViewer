@@ -21,3 +21,4 @@ packaging/build/
 /dist/
 .claude
 .vscode
+.data_test

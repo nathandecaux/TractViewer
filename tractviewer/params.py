@@ -28,11 +28,14 @@ DISPLAY_PARAMS = {
     "scalar_bar", "scalar_bar_args", "legend", "categorical_legend",
     "categorical_max_values", "unique_values", "point_size", "line_width",
     "points_as_spheres", "ambient", "specular", "diffuse",
-    "envelope_voxel_size", "envelope_smooth", "volume_render",
+    "envelope_voxel_size", "envelope_smooth", "volume_render", "segmentation",
 }
 # volume_render (raw NIfTI volumes, marching_cubes=false): "mip" (maximum intensity projection) or
 # "composite" (shaded volume rendering); cmap, clim and opacity apply. Values below clim[0] are transparent.
 VOLUME_RENDER_MODES = ("mip", "composite")
+# segmentation (raw NIfTI volumes, web / desktop / HTML): true = label map (one color per label,
+# label 0 transparent), false = intensity image. Default: detected (8-bit integer images, label intent,
+# integer images with few distinct values).
 # model (NIfTI): "dti" | "odf" | "scalar" forces the interpretation of a 4D/5D image (default: detected).
 LOAD_PARAMS = {"marching_cubes", "smooth", "iso", "coord_system", "max_points", "model"}
 KNOWN_PARAMS = DISPLAY_PARAMS | LOAD_PARAMS

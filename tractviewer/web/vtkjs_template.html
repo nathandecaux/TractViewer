@@ -94,6 +94,10 @@
   #items li.off .name { color: var(--muted); }
   #items li .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #items li input[type=checkbox] { margin: 0; }
+  #items li .grip { flex: none; width: 10px; color: var(--muted); cursor: grab; touch-action: none; user-select: none; visibility: hidden; }
+  #items li:hover .grip { visibility: visible; }
+  #items li.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+  #items li.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
   .layer-swatch { flex: none; width: 26px; height: 10px; border-radius: 2px; border: 1px solid var(--border); }
   .icon-btn {
     border: none; background: none; color: var(--muted); padding: 0 3px; font-size: 14px; line-height: 1; border-radius: 4px;
@@ -354,6 +358,7 @@
   <div class="context-body">
     <div data-panel="color">
       <label data-kind="mesh">Color by <select id="array"></select></label>
+      <label data-kind="volume" class="inline" title="Label map: one color per label, label 0 transparent, no interpolation">Segmentation (label map) <input type="checkbox" id="segmentation"></label>
       <label data-kind="volume" id="map-row" title="Scalar map shown by the slices and the volume rendering">Map <select id="volume-map"></select></label>
       <label id="color-row" class="inline" data-kind="mesh">Solid color <input type="color" id="color"></label>
       <div id="scalar-controls">
@@ -508,7 +513,8 @@
       <label class="inline">Objects in 2D views <input type="checkbox" id="objects-2d"></label>
       <label>2D slab thickness (mm) <output id="slab-2d-out"></output><input type="range" id="slab-2d" min="0.5" max="40" step="0.5"></label>
       <p class="muted">Wheel = slice (Shift ×5, Ctrl = zoom) · click/drag = move the cross ·
-        right-drag = zoom · Shift/middle-drag = pan · double-click = reset.</p>
+        right-drag = zoom · Shift/middle-drag = pan · double-click = reset.
+        3D view: left-drag = rotate, middle-drag = pan, right-drag / wheel = zoom.</p>
     </div>
   </div>
 </div>
@@ -801,6 +807,23 @@
   grw.resize();
   const renderer = grw.getRenderer();
   const renderWindow = grw.getRenderWindow();
+  // 3D view mouse, same buttons as the 2D views: left = rotate, middle = pan, right = zoom,
+  // wheel = zoom (Shift+left = pan, Ctrl+left = roll).
+  (function setup3DInteraction() {
+    const { vtkInteractorStyleManipulator } = vtk.Interaction.Style;
+    const M = vtk.Interaction.Manipulators;
+    const style = vtkInteractorStyleManipulator.newInstance();
+    const add = (Type, options) => style.addMouseManipulator(Type.newInstance(options));
+    add(M.vtkMouseCameraTrackballRotateManipulator, { button: 1, useFocalPointAsCenterOfRotation: true });
+    add(M.vtkMouseCameraTrackballPanManipulator, { button: 1, shift: true });
+    add(M.vtkMouseCameraTrackballRollManipulator, { button: 1, control: true });
+    add(M.vtkMouseCameraTrackballPanManipulator, { button: 2 });
+    // Dragging down zooms out, like the 2D views.
+    add(M.vtkMouseCameraTrackballZoomManipulator, { button: 3, flipDirection: true });
+    add(M.vtkMouseCameraTrackballZoomManipulator, { scrollEnabled: true, dragEnabled: false });
+    grw.getInteractor().setInteractorStyle(style);
+    $('view').addEventListener('contextmenu', (e) => e.preventDefault());
+  })();
   // Renders are coalesced to one per animation frame (sliders fire many events per frame).
   let renderQueued = false;
   function render() {
@@ -1305,9 +1328,48 @@
         ...(spec.state ? JSON.parse(JSON.stringify(spec.state)) : {}),
       },
     };
+    // Label map (detected on the Python side): one color per label, label 0 transparent.
+    if (spec.segmentation && !spec.state) setSegmentation(volume, true);
     if (spec.glyphs) volume.glyphs = buildGlyphs(spec.glyphs);
     applyVolume(volume);
     return volume;
+  }
+
+  // ---------- Segmentations (label maps) ----------
+  const SEGMENTATION_MAX_LABELS = 256;
+  // Distinct, well separated colors for many labels (golden angle on the hue circle).
+  function labelColor(i) {
+    const h = (i * 137.508) % 360, s = 0.65 + 0.2 * ((i >> 1) % 2), l = 0.5 + 0.12 * ((i % 3) - 1);
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+    return rgbToHex([f(0), f(8), f(4)]);
+  }
+  // Discrete coloring of a label map: one class per label, label 0 (background) empty.
+  function segmentationClasses(values) {
+    const unique = uniqueValues(values, SEGMENTATION_MAX_LABELS);
+    if (!unique) return null;
+    const labels = unique.filter((v) => v !== 0);
+    const palette = labels.length <= 10 ? 'tab10' : 'tab20';
+    const colors = labels.length <= 20 ? paletteColors(palette, labels.length) : labels.map((_, i) => labelColor(i));
+    let k = 0;
+    const classes = unique.map((v) => (v === 0
+      ? { lo: 0, hi: 0, color: '#000000', hidden: true }
+      : { lo: v, hi: v, color: colors[k++] }));
+    return { ...newDiscrete(), enabled: true, palette, method: 'unique', classes, otherHidden: true };
+  }
+  // Switch a volume between label map and intensity image. Returns an error message or ''.
+  function setSegmentation(volume, on) {
+    const s = volume.state;
+    if (on) {
+      const d = segmentationClasses(volume.image.getPointData().getScalars().getData());
+      if (!d) { s.segmentation = false; return `More than ${SEGMENTATION_MAX_LABELS} distinct values: not a label map.`; }
+      Object.assign(s, { segmentation: true, discrete: d, interp: 'nearest', render: 'none', isoValue: 0.5 });
+    } else {
+      s.segmentation = false;
+      if (s.discrete) s.discrete.enabled = false;
+      s.interp = 'linear';
+    }
+    return '';
   }
 
   // ---------- Diffusion glyphs (2D views) ----------
@@ -1713,9 +1775,10 @@
       else fillLut(volume.lut, state.cmap, state.range[0], state.range[1], state.cmapReverse);
     }
     const nearest = discrete || state.interp === 'nearest';
-    [...volume.slices, ...volume.views].forEach(({ actor }, i) => {
+    // Layers: the opacity also applies to the 2D views (an image over another one).
+    [...volume.slices, ...volume.views].forEach(({ actor }) => {
       const prop = actor.getProperty();
-      const opacity = i < volume.slices.length ? state.opacity : 1;
+      const opacity = state.opacity;
       prop.setOpacity(opacity);
       if (prop.getPiecewiseFunction(0) !== (hidden ? volume.pwf : null)) prop.setPiecewiseFunction(0, hidden ? volume.pwf : null);
       setDiscard(actor.getMapper(), hidden ? SLICE_DISCARD : null);
@@ -1885,23 +1948,68 @@
     else renderSlicing();
   }
 
+  // ---------- Image layers ----------
+  // Every visible volume shows its slices, stacked like layers (MI-Brain): a volume higher in
+  // the list is drawn in front of the ones below it. Each slice is moved onto the current plane
+  // (volumes on different grids) and then toward the camera by LAYER_GAP mm per layer below it.
+  const LAYER_GAP = 0.05;
+  function layerRanks() {  // volume id -> number of visible volume layers below it
+    const order = items.filter((i) => i.kind === 'volume').map((i) => volumes.get(i.id)).filter((v) => v && v.state.visible);
+    return new Map(order.map((v, i) => [v.id, order.length - 1 - i]));
+  }
+  // 3D view: "toward the camera" depends on the side of each plane the camera is on.
+  function placeSlices3d() {
+    const eye = renderer.getActiveCamera().getPosition();
+    for (const volume of volumes.values()) {
+      volume.slices.forEach((slice, axis) => {
+        if (slice.shift === undefined) return;
+        const side = eye[axis] >= slicing.pos[axis] ? 1 : -1;
+        const p = [0, 0, 0];
+        p[axis] = slice.shift + side * slice.rank * LAYER_GAP;
+        slice.actor.setPosition(...p);
+      });
+    }
+  }
+  renderer.getActiveCamera().onModified(placeSlices3d);
+
   function applySlicing() {
     const ref = refObject();
     const b = refBounds();
+    const ranks = layerRanks();
     for (const volume of volumes.values()) {
-      const active = ref === volume && volume.state.visible;
-      const sliceIndex = (axis) => clamp(Math.round((slicing.pos[axis] - volume.origin[axis]) / volume.spacing[axis]), 0, volume.dims[axis] - 1);
-      volume.slices.forEach(({ mapper, actor }, axis) => {
+      const rank = ranks.get(volume.id) || 0;
+      const index = (axis) => clamp(Math.round((slicing.pos[axis] - volume.origin[axis]) / volume.spacing[axis]), 0, volume.dims[axis] - 1);
+      // Plane inside the volume (half a voxel margin): otherwise its border slice would be shown.
+      const inside = (axis) => {
+        const half = volume.spacing[axis] / 2, p = slicing.pos[axis];
+        return p >= volume.bounds[2 * axis] - half && p <= volume.bounds[2 * axis + 1] + half;
+      };
+      // Offset moving the voxel plane of the slice onto the current plane.
+      const shift = (axis, i) => slicing.pos[axis] - (volume.origin[axis] + i * volume.spacing[axis]);
+      volume.slices.forEach((slice, axis) => {
+        const on = volume.state.visible && inside(axis);
         // 3D slices hidden while the volume is rendered (MIP / composite); 2D views keep them.
-        actor.setVisibility(active && slicing.enabled[axis] && (volume.state.render || 'none') === 'none');
-        if (active) mapper.setSlice(sliceIndex(axis));
+        slice.actor.setVisibility(on && slicing.enabled[axis] && (volume.state.render || 'none') === 'none');
+        if (!on) return;
+        const i = index(axis);
+        slice.mapper.setSlice(i);
+        slice.shift = shift(axis, i);
+        slice.rank = rank;
       });
       volume.views.forEach(({ mapper, actor }, k) => {
-        actor.setVisibility(active);
-        if (active) mapper.setSlice(sliceIndex(views2d[k].axis));
+        const view = views2d[k], axis = view.axis;
+        const on = volume.state.visible && inside(axis);
+        actor.setVisibility(on);
+        if (!on) return;
+        const i = index(axis);
+        mapper.setSlice(i);
+        const p = [0, 0, 0];
+        p[axis] = shift(axis, i) - view.forward[axis] * rank * LAYER_GAP;  // 2D camera looks along `forward`
+        actor.setPosition(...p);
       });
       updateGlyphs(volume);
     }
+    placeSlices3d();
     const showPlanes = !ref || ref.kind !== 'volume';
     planes.forEach(({ source, actor }, axis) => {
       actor.setVisibility(showPlanes && slicing.enabled[axis]);
@@ -2007,9 +2115,11 @@
     meshes.set(spec.id, buildMesh(spec));
     items.push({ kind: 'mesh', id: spec.id });
   }
+  // A new volume goes on top of the image layers (drawn in front), like in MI-Brain.
   function addVolumeSpec(spec) {
     volumes.set(spec.id, buildVolume(spec));
-    items.push({ kind: 'volume', id: spec.id });
+    const top = items.findIndex((i) => i.kind === 'volume');
+    items.splice(top < 0 ? items.length : top, 0, { kind: 'volume', id: spec.id });
   }
   function replaceMeshSpec(spec) {
     const old = meshes.get(spec.id);
@@ -2051,18 +2161,55 @@
     return `background: ${obj.state.color}`;
   }
 
+  // Drag a layer by its grip to reorder it within its group (images: top = in front).
+  function startReorder(e, item) {
+    e.preventDefault();
+    e.stopPropagation();
+    const list = $('items');
+    const grip = e.currentTarget;
+    grip.setPointerCapture(e.pointerId);
+    let drop = null;
+    const clear = () => list.querySelectorAll('.drop-before, .drop-after').forEach((n) => n.classList.remove('drop-before', 'drop-after'));
+    const move = (ev) => {
+      clear();
+      const under = document.elementFromPoint(ev.clientX, ev.clientY);
+      const li = under && under.closest && under.closest('#items li[data-id]');
+      drop = null;
+      if (!li || li.dataset.kind !== item.kind || li.dataset.id === item.id) return;
+      const box = li.getBoundingClientRect();
+      const after = ev.clientY > box.top + box.height / 2;
+      li.classList.add(after ? 'drop-after' : 'drop-before');
+      drop = { id: li.dataset.id, after };
+    };
+    const end = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', end);
+      grip.removeEventListener('pointercancel', end);
+      clear();
+      if (!drop) return;
+      items.splice(items.indexOf(item), 1);
+      const at = items.findIndex((i) => i.kind === item.kind && i.id === drop.id);
+      items.splice(at + (drop.after ? 1 : 0), 0, item);
+      renderItems();
+      applySlicing();
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+  }
+
   // Layer list grouped by type (volumes first), like the data manager of MI-Brain.
   function renderItems() {
     const list = $('items');
     list.replaceChildren();
     $('empty').hidden = items.length > 0;
     const groups = [
-      ['Volumes', items.filter((i) => i.kind === 'volume')],
-      ['Surfaces & tracts', items.filter((i) => i.kind === 'mesh')],
+      ['Images', items.filter((i) => i.kind === 'volume'), 'Top of the list = drawn in front (drag ⠿ to reorder)'],
+      ['Surfaces & tracts', items.filter((i) => i.kind === 'mesh'), ''],
     ];
-    for (const [title, group] of groups) {
+    for (const [title, group, hint] of groups) {
       if (!group.length) continue;
-      list.appendChild(el('li', { className: 'group-title' }, [
+      list.appendChild(el('li', { className: 'group-title', title: hint }, [
         el('span', { textContent: title }), el('span', { className: 'count', textContent: `(${group.length})` }),
       ]));
       for (const item of group) {
@@ -2081,14 +2228,19 @@
         inspect.addEventListener('click', (e) => { e.stopPropagation(); selected = item; openInspector(); });
         const remove = el('button', { type: 'button', className: 'icon-btn remove', textContent: '×', title: 'Remove (mesh and volume)' });
         remove.addEventListener('click', (e) => { e.stopPropagation(); removeDataset(item.id); });
+        const grip = el('span', { className: 'grip', textContent: '⠿', title: 'Drag to reorder' + (item.kind === 'volume' ? ' (top = in front)' : '') });
+        grip.addEventListener('pointerdown', (e) => startReorder(e, item));
+        grip.addEventListener('click', (e) => e.stopPropagation());
         const li = el('li', {
           className: [selected === item ? 'selected' : '', isIsoId(item.id) ? 'iso' : '', obj.state.visible ? '' : 'off'].join(' '),
         }, [
-          checkbox, el('span', { className: 'layer-swatch', style: layerSwatchStyle(obj) }),
+          grip, checkbox, el('span', { className: 'layer-swatch', style: layerSwatchStyle(obj) }),
           el('span', { className: 'name', textContent: obj.name, title: obj.name }), inspect, remove,
         ]);
         li.addEventListener('click', () => { if (selected !== item) { selected = item; refreshAll(); } });
         li.addEventListener('dblclick', () => { selected = item; openInspector(); });
+        li.dataset.kind = item.kind;
+        li.dataset.id = item.id;
         list.appendChild(li);
       }
     }
@@ -2397,7 +2549,7 @@
 
   // ---------- Info tab ----------
   function renderInfo(obj) {
-    const rows = [['Name', obj.name], ['Type', obj.kind === 'volume' ? 'volume (NIfTI)' : (isIsoId(obj.id) ? 'isosurface' : 'mesh / tractogram')]];
+    const rows = [['Name', obj.name], ['Type', obj.kind === 'volume' ? (obj.state.segmentation ? 'segmentation (label map)' : 'volume (NIfTI)') : (isIsoId(obj.id) ? 'isosurface' : 'mesh / tractogram')]];
     if (obj.kind === 'volume') {
       rows.push(['Dimensions', `${obj.dims.join(' × ')} voxels`], ['Spacing', `${obj.spacing.map(fmt).join(' × ')} mm`],
         ['Origin', `${obj.origin.map(fmt).join(', ')} mm`], ['Intensity range', `${fmt(obj.fullRange[0])} … ${fmt(obj.fullRange[1])}`]);
@@ -2441,7 +2593,7 @@
     const s = obj.state;
     const isMesh = obj.kind === 'mesh';
     $('item-kind').textContent = isMesh ? (obj.tract ? 'tracts' : isIsoId(obj.id) ? 'isosurface' : 'mesh')
-      : (obj.glyphs ? obj.glyphs.model.toUpperCase() : 'volume');
+      : (obj.glyphs ? obj.glyphs.model.toUpperCase() : s.segmentation ? 'labels' : 'volume');
     document.querySelectorAll('#context [data-kind]').forEach((node) => {
       const kind = node.dataset.kind;
       node.hidden = kind === 'tract' ? !obj.tract : kind !== obj.kind;
@@ -2472,6 +2624,7 @@
       setSlider('line-width', s.lineWidth);
       setSlider('point-size', s.pointSize);
     } else {
+      $('segmentation').checked = Boolean(s.segmentation);
       $('volume-render').value = s.render || 'none';
       $('map-row').hidden = !obj.maps;
       if (obj.maps) {
@@ -3583,6 +3736,13 @@
   $('line-width').addEventListener('input', (e) => updateSelected((o) => { o.state.lineWidth = +e.target.value; }));
   $('point-size').addEventListener('input', (e) => updateSelected((o) => { o.state.pointSize = +e.target.value; }));
 
+  $('segmentation').addEventListener('change', (e) => {
+    let error = '';
+    updateSelected((o) => { if (o.kind === 'volume') error = setSegmentation(o, e.target.checked); });
+    $('status').className = error ? 'error' : 'muted';
+    $('status').textContent = error;
+    applySlicing();
+  });
   $('volume-render').addEventListener('change', (e) => {
     updateSelected((o) => { o.state.render = e.target.value; });
     applySlicing();

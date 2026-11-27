@@ -298,3 +298,25 @@ def test_thin_lines_scale_opacity():
     surface = {"line_width": 0.2, "opacity": 0.5}
     _apply_thin_lines(pv.Sphere(), surface)
     assert surface == {"line_width": 0.2, "opacity": 0.5}  # line width unused on a surface
+
+
+def test_segmentation_detection(tmp_path):
+    import nibabel as nib
+
+    rng = np.random.default_rng(0)
+    labels = rng.integers(0, 4, size=(8, 8, 8))
+    cases = {
+        "u8.nii.gz": (labels.astype(np.uint8), True),           # 8-bit integers: label map
+        "i16.nii.gz": (labels.astype(np.int16), True),          # few integer values
+        "t1.nii.gz": (rng.random((8, 8, 8)).astype(np.float32) * 1000, False),
+        "i16_many.nii.gz": (np.arange(512, dtype=np.int16).reshape(8, 8, 8), False),
+    }
+    for name, (data, expected) in cases.items():
+        nib.save(nib.Nifti1Image(data, np.eye(4)), tmp_path / name)
+        assert vtkjs.nifti_volume(tmp_path / name)["segmentation"] is expected, name
+
+    # Explicit parameter overrides the detection.
+    vis = TractViewer()
+    vis.add(str(tmp_path / "u8.nii.gz"), {"marching_cubes": False, "segmentation": False})
+    _, volume = vtkjs.serialize_dataset(vis, *vis._find(vis.names()[0]))
+    assert volume["segmentation"] is False

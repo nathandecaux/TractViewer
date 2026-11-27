@@ -162,6 +162,8 @@ def serialize_dataset(viewer, ds, prm, max_streamlines: Optional[int] = None,
             else:
                 volume = nifti_volume(source, viewer.coord_system, max_voxels)
             volume.update(id=name, name=name, visible=prm.get("visible", True) is not False)
+            if prm.get("segmentation") is not None:  # explicit choice over the automatic detection
+                volume["segmentation"] = bool(prm["segmentation"])
             # Initial display: volume rendering mode (volume_render=mip|composite), colormap, range.
             if prm.get("volume_render"):
                 volume["render"] = str(prm["volume_render"])
@@ -296,7 +298,37 @@ def nifti_volume(path: Union[str, Path], coord_system: str = "LPS",
     data = np.asarray(img.dataobj, dtype=np.float32)
     while data.ndim > 3:
         data = data[..., 0]
-    return volume_from_array(data, np.asarray(img.affine, dtype=float), coord_system, max_voxels)
+    volume = volume_from_array(data, np.asarray(img.affine, dtype=float), coord_system, max_voxels)
+    volume["segmentation"] = is_segmentation(img, data)
+    return volume
+
+
+# Integer images with at most this many distinct values are label maps.
+SEGMENTATION_MAX_LABELS = 256
+
+
+def is_segmentation(img, data: Optional[np.ndarray] = None) -> bool:
+    """Label map (segmentation)? 8-bit integer images always; label intent (NIfTI
+    intent code 1002 = NIFTI_INTENT_LABEL); other integer images with integer
+    values and few distinct values (<= SEGMENTATION_MAX_LABELS)."""
+    try:
+        if int(img.header.get("intent_code", 0)) == 1002:
+            return True
+    except (TypeError, ValueError):
+        pass
+    dtype = np.dtype(img.get_data_dtype())
+    if dtype.kind not in "iu":
+        return False
+    slope, inter = (img.dataobj.slope, img.dataobj.inter) if hasattr(img.dataobj, "slope") else (1.0, 0.0)
+    scaled = not ((slope is None or slope == 1) and (inter is None or inter == 0))
+    if dtype.itemsize == 1 and not scaled:
+        return True
+    if data is None or scaled:
+        return False
+    sample = data.ravel()[:: max(1, data.size // 4_000_000)]
+    if not np.all(sample == np.round(sample)):
+        return False
+    return np.unique(sample).size <= SEGMENTATION_MAX_LABELS
 
 
 def diffusion_volume(ds, coord_system: str = "LPS", max_voxels: int = DEFAULT_MAX_VOXELS,
